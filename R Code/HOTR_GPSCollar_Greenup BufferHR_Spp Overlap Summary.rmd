@@ -1,0 +1,212 @@
+---
+title: "HOTR Greenup Buffer HR Spp Overlap Summary"
+author: "Molly Caldwell"
+date: "1/21/2022"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/HOTR-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(parallel)
+library(dplyr)
+library(tidyr)
+library(ecospat)
+```
+
+#Load previously calculated greenup buffer home ranges and spp overlap rasters
+
+```{r}
+#load HRs (buffer HR April-June by cid_year)
+gu_hrs <- readRDS("./Code data output/HOTR_bufferHRs_200m_greenup.rds")
+
+#create list by species
+spp <- unique(gu_hrs$species)
+gu_hrs_list <- list()
+
+for(i in 1:length(spp)){
+  gu_hrs_list[[i]] <- gu_hrs %>%
+    filter(species == spp[[i]]) %>%
+    mutate(value = 1)
+}
+```
+
+```{r}
+#load overlap ranked rasters from file
+file_list <- list.files(path = "./Code data output/",
+              pattern = "*ranked0to1.tif",
+               full.names = T)
+
+rank_rast_list <- list()
+
+for(i in 1:length(file_list)){
+  rank_rast_list[[i]] <- raster(file_list[[i]])
+}
+
+names(rank_rast_list) <- c("bighorn", "bison", "deer", "elk", "pronghorn")
+
+#multiply raster values by 100
+ol_rast_list <- list()
+
+for(i in 1:length(rank_rast_list)){
+  print(i)
+      
+ol_rast_list[[i]] <- calc(rank_rast_list[[i]], function(x) x * 100)
+}
+
+names(ol_rast_list) <- c("bighorn", "bison", "deer", "elk", "pronghorn")
+```
+
+#Mean %overlap values (all species) by buffer HR
+
+```{r}
+#create data frame to store mean values
+ol_buffHR_df <- data.frame(cid_yr = "NA", ol_spp = "NA", avg_ol = "NA")
+
+#list species
+spp_list <- c("bighorn", "bison", "deer", "elk", "pronghorn")
+
+#set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("gu_hrs", "ol_rast_list", "ol_buffHR_df", "spp_list"))
+
+#loop through buffHR list
+for(i in 1:nrow(gu_hrs)){
+  bhr <- gu_hrs[i,]
+    print(paste0("i", i))
+  #loop through each species for overlap rasters
+  for(j in 1:length(ol_rast_list)){
+   print(paste0("j", j))
+     #extract mean percent overlap per buffer HR
+    ol_ext <- raster::extract(ol_rast_list[[j]], bhr, weights=FALSE, fun=mean, df = TRUE)
+    
+    if(length(ol_ext$ID) == 0){ol_ext <- data.frame(ID = 0, layer = 0)}
+     
+    ol_ext$cid_yr <- bhr$cid_yr
+
+    ol_ext <- ol_ext %>%
+      rename(avg_ol = layer) %>%
+      mutate(ol_spp = spp_list[[j]])
+    
+    ol_ext$ID <- NULL
+    
+    ol_buffHR_df <- rbind(ol_ext, ol_buffHR_df)
+  }
+
+}
+
+
+
+stopCluster(clust)   #stop the parallelization framework
+
+#remove NA row
+ol_buffHR_df <- ol_buffHR_df %>%
+  filter(cid_yr != "NA")
+
+#save as csv
+write.csv(ol_buffHR_df, "./Code data output/greenup_bufferHR_allspp_avg_percsppOVERLAP.csv")
+```
+
+#Graph means by species
+
+```{r}
+#add species and set average overlap values to numeric
+ol_buffHR_df <- ol_buffHR_df %>%
+  mutate(species = if_else(str_detect(cid_yr, 'BI'), "bison",
+                   if_else(str_detect(cid_yr, 'BH'), "bighorn",
+                   if_else(str_detect(cid_yr, 'MD'), "deer",
+                   if_else(str_detect(cid_yr, 'EL'), "elk",
+                   if_else(str_detect(cid_yr, 'PR'), "pronghorn", "NA")))))) %>%
+  mutate(avg_ol = if_else(is.na(avg_ol), 0, as.numeric(avg_ol))) 
+```
+
+```{r}
+#create species summary data frame (average by species)
+buffHR_ol_spp <- ol_buffHR_df %>%
+  group_by(species, ol_spp) %>%
+  summarize(mean_ol = mean(avg_ol), sd_ol = sd(avg_ol),
+             .groups = "keep")
+```
+
+```{r}
+#graph mean ol by species
+ggplot(buffHR_ol_spp, aes(x = species, y = mean_ol, color = ol_spp)) +
+  geom_point(size = 5) +
+  xlab("Species") +
+  ylab("Mean species overlap percents") +
+  ggtitle("Average species overlap in home ranges") 
+```
+
+```{r}
+#boxplot
+
+#set facet labels
+facet_names <- list("bighorn" = "High use areas: bighorn", 
+              "bison" = "High use areas: bison", 
+              "deer" = "High use areas: deer",
+              "elk" =  "High use areas: elk", 
+              "pronghorn" = "High use areas: pronghorn")
+
+facet_labeller <- function(variable,value){
+  return(facet_names[value])
+}
+
+ol_buffHR_df %>%
+  ggplot( aes(x=species, y=avg_ol, fill=species)) +
+    geom_boxplot() +
+    facet_wrap(~ol_spp, labeller = facet_labeller) +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)) +
+    xlab("Average of high use area percentages in HRs") +
+    ylab("") +
+    ggtitle("Green-up buffer home range overlap with high use species areas")
+```
+
+
+
+```{r}
+#ridgeline plots
+library(ggridges)
+library(ggpubr)
+
+#set facet labels
+facet_names <- list("bighorn" = "High use areas: bighorn", 
+              "bison" = "High use areas: bison", 
+              "deer" = "High use areas: deer",
+              "elk" =  "High use areas: elk", 
+              "pronghorn" = "High use areas: pronghorn")
+
+facet_labeller <- function(variable,value){
+  return(facet_names[value])
+}
+
+#perc cover
+ggplot(ol_buffHR_df, aes(x = avg_ol, y = species, fill = species)) +
+  geom_density_ridges() +
+  facet_wrap(~ol_spp, labeller = facet_labeller) +
+  #theme_ridges() + 
+  theme(legend.position = "none") +
+  xlab("Average of high use percentages in HRs") +
+  ylab("") +
+  ggtitle("Green-up buffer home range overlap with high use species areas") 
+
+
+```
+
+

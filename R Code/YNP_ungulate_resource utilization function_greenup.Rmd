@@ -1,0 +1,492 @@
+---
+title: "YNP_resource utilization_greenup"
+author: "Molly Caldwell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+# packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(stringr)
+library(move)
+library(dummies)
+library(lme4)
+library(car)
+```
+
+```{r}
+#load all spp GPS data- greenup
+data <- readRDS("./data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+head(data)
+```
+
+```{r}
+# ---------------#
+# load up UDs ####
+# ---------------#
+fls <- dir("./Code output/dBBMM_UDs_greenup/", full.names = TRUE)  #this is the folder where your BBs are stored
+
+# get the names out of the file info
+names <- fls %>% 
+  str_split_fixed("/", str_count(fls[1], "/")+1) %>% 
+  as.data.frame() %>% 
+  pull(str_count(fls[1], "/")+1) %>% 
+  str_replace("BBdyn_","") %>% 
+  str_replace(".tif","")
+names
+
+# Did all your id_yr_seas give you a home range?
+table(names %in% data$id_yr_seas)   # should all be TRUE, if not, then might want to revisit home range analyses.
+
+#loop over files, and create a list of the UDs in raster format ####
+DBBs <- lapply(1:length(fls), function(i){
+  return(raster(fls[i])) # return the named object
+  })
+names(DBBs) <- names
+rm(fls, names)
+plot(DBBs[[3]])
+
+lapply(DBBs, res) #check resolution of each UD (should be the same as minimum resolution of your GIS variables)
+lapply(DBBs, ncell) #check number of cells in each UD
+lapply(DBBs, function(i){sum(values(i))})  #verify that sums are all the same for each UD
+
+```
+
+```{r}
+#-----------------------------#
+# Case 1, create database  ####
+#-----------------------------#
+#were going to loop over the uds in DBBs to create the response variable (ie 'ud') for the RUF
+
+# now for the actual loop
+datC1 <- do.call(rbind, lapply(1:length(DBBs), function(i){
+
+  ud <- DBBs[[i]] # grab the UD in question
+  proj <- projection(ud) # remember projection from DBB is different than what you are using
+  
+  xy <- as.data.frame(coordinates(ud)) #grab the coordinates
+  ud <- data.frame(xy, ud=values(ud)) #make a dataframe with coordiantes and UD values
+
+  # get rid of lower 1% to significantly reduce the number of data points (probably should keep these for a proper analysis)
+  vals <- sort(ud$ud, decreasing = TRUE)
+  cutoff <- cumsum(vals)
+  cutoff <- vals[cutoff > .99][1]  # i am only keeping the cells with the top 99% cumulative use
+  ud$ud[ud$ud < cutoff] <- 0
+  #remove 0s   (this in reality is optional. You won't need a zero inflated model if you remove the 0s. 
+  # but removing the zeros results in a lost in ability to discriminate between used and unused habitats)
+  # your analysis is thus telling you the habitats the predict high use versus low use.
+  ud <- ud[ud$ud != 0,]
+  
+  ud$id_yr_seas <- names(DBBs)[i] #add an id_yr_seas column
+  # make spatially aware again
+  ud <- st_as_sf(ud, coords=c("x","y"), dim="XY", crs=proj)
+  return(ud)
+}))
+
+head(datC1)
+hist(datC1$ud)   # the is the response variable for the RUF, i.e., the vale of the UD
+rm(DBBs)
+
+```
+
+
+```{r}
+#----------------------#
+# load up GIS data  ####
+#----------------------#
+
+elev <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Elevation_meters_30m_gye.tif")
+trasp <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Aspect_TRASP_30m_gye.tif") # 0 = NNE, 1 = SSW
+slope <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Slope_degrees_30m_gye.tif")
+tpi <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Slope_degrees_30m_gye.tif")
+
+#RAP data (biomass and %cover by land cover type per year)
+RAP_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = "^RAP*",
+                        full.names = TRUE)
+
+RAP_raster_list <- list()
+for(i in 1:length(RAP_file_list)){
+  print(i)
+RAP_raster_list[[i]] <- raster(RAP_file_list[[i]])
+}
+
+RAP_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_file_list)
+RAP_names <- sub("*.tif", "", RAP_names)
+names(RAP_raster_list) <- RAP_names
+```
+
+```{r}
+#add annual and perennial biomass for combined biomass value
+biomass_stack <- stack(RAP_raster_list[["2016_Biomass_AnnualForbsGrasses"]], 
+                       RAP_raster_list[["2016_Biomass_PerennialForbsGrasses"]])
+
+ann_per_biomass <-  calc(biomass_stack, sum)
+
+RAP_raster_list[[length(RAP_raster_list) + 1]] <- ann_per_biomass
+names(RAP_raster_list) <- c(RAP_names, "comb_ann_per_biomass_2016")
+```
+
+```{r}
+#aggregate environmental rasters to UD resolution (300 m, factor of 10)
+elev_agg <- aggregate(elev, fact = 10, fun = mean)
+trasp_agg <- aggregate(trasp, fact = 10, fun = mean)
+slope_agg <- aggregate(slope, fact = 10, fun = mean)
+tpi_agg <- aggregate(tpi, fact = 10, fun = mean)
+
+RAP_agg_list <- list()
+for(i in 1:length(RAP_raster_list)){
+  print(i)
+  RAP_agg_list[[i]] <- aggregate(RAP_raster_list[[i]], fact = 10, fun = mean)
+}
+
+RAP_names <- c(RAP_names, "comb_ann_per_biomass_2016")
+names(RAP_agg_list)  <- RAP_names
+```
+
+
+```{r}
+# extract GIS data to points
+datC1$elev <- raster::extract(elev, st_transform(datC1, crs=projection(elev_agg)))
+datC1$trasp <- raster::extract(trasp, st_transform(datC1, crs=projection(trasp_agg)))
+datC1$slope <- raster::extract(slope, st_transform(datC1, crs=projection(slope_agg)))
+datC1$tpi <- raster::extract(tpi, st_transform(datC1, crs=projection(tpi_agg)))
+
+for(i in 1:length(RAP_agg_list)){
+  print(i)
+  
+  datC1 <- datC1 %>%
+    mutate(n = raster::extract(RAP_agg_list[[i]], 
+                 st_transform(datC1, crs = projection(RAP_agg_list[[i]])))) %>%
+    rename(!!RAP_names[i] := n) #rename column based on looped subset of RAP name vector
+  
+}
+
+head(datC1)
+
+```
+
+
+
+```{r}
+#------------------------#
+# analyze case 1 data ####
+#------------------------#
+
+#start by checking correlation among the variables
+# create a vector of your variable names (include only continuous here)
+variables <- c("elev","trasp","slope","tpi", "2016_Cover_Trees", "perc_forbgrass_biomass_2016")
+
+correl <- datC1 %>% 
+  st_set_geometry(NULL) %>% 
+  dplyr::select(all_of(variables)) %>% 
+  cor(use="pairwise.complete.obs", method="pearson") %>% 
+  round(3)
+  
+correl
+ifelse(abs(correl)>.4, correl, NA)  # a cleaner way to look at it                                                                                                                                                                                                                                        
+# look at distributions of the variables (once you run this line, go back through your plots and look what you did)
+for(i in 1:length(variables)){
+  hist(st_set_geometry(datC1,NULL)[,variables[i]], main=variables[i])
+}
+
+# get the scale of the variables similar (this helps the model fit)
+datC1$elev <- datC1$elev/1000 # elev to KM
+
+#create percent biomass measure for scale
+datC1$perc_forbgrass_biomass_2016 <- (datC1$comb_ann_per_biomass_2016/max(datC1$comb_ann_per_biomass_2016))*100
+
+# look at distributions of the variables (once you run this line, go back through your plots and look what you did)
+for(i in 1:length(variables)){
+  hist(st_set_geometry(datC1,NULL)[,variables[i]], main=variables[i])
+}
+
+# create dummy variables for landcover variable (don't forget, need to drop one in analysis)
+# table(datC1$landcov)
+# table(is.na(datC1$landcov))  #this ideally should be ALL FALSE. If not, then you should remove the lines with NAs
+# datC1$landcover <- datC1$landcov
+# dum <- datC1 %>% 
+#   st_set_geometry(NULL) %>% 
+#   dplyr::select(landcov) %>% 
+#   dummy.data.frame(names="landcov") #create dummy variables
+# 
+# head(dum)
+# length(unique(datC1$landcov)) == ncol(dum)   # this should be TRUE
+# # now cbind up the new columns
+# datC1 <- cbind(datC1, dum)
+# head(datC1)
+# rm(dum)
+```
+
+```{r}
+#add species to data for modeling
+datC1 <- datC1 %>% mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+```
+ 
+
+
+```{r}
+#-----------------------#
+# parameterize model ####
+#-----------------------#
+spp <- unique(datC1$species)
+
+mod_list <- list()
+
+for(i in 1:length(spp)){
+dat_spp <- datC1 %>% filter(species == spp[[i]])
+
+dat_spp$log_ud <- log(dat_spp$ud)   # add the logged response variable to the database
+
+names(dat_spp)
+
+# mod1 has a random effect for animal id_yr_seas on the intercept (you should do this at a minimum)
+mod_list[[i]] <- lmer(log_ud ~ elev + trasp + slope  + perc_forbgrass_biomass_2016 +
+               `2016_Cover_Trees` +
+               (1|id_yr_seas), 
+             data = dat_spp)
+}
+
+names(mod_list) <- spp
+
+summary(mod_list[["deer"]])
+ranef(mod_list[["bison"]]) #get random effects
+
+#table of estimates, SEs, test statistics, 95% CIs, variance among random effects
+m1_df <- data.frame(species = "NA", variable = "NA", estimate = "NA", SE = "NA",
+                    tvalue = "NA", CI_2.5 = "NA", CI_95 = "NA", VIF = "NA")
+for(i in 1:length(mod_list)){
+
+vbl <- c("intercept", "elevation", "trasp", "slope", "forb/grass biomass",
+         "% tree cover")
+s <- rep(spp[i], times = 6)
+est <- round(mod_list[[i]]@beta, 3)
+se <- round(summary(mod_list[[i]])$coefficients[, 2], 3)
+tv <- round(summary(mod_list[[i]])$coefficients[, 3], 3)
+ci <- round(confint.merMod(mod_list[[i]], method="Wald"),3)
+ci_2.5 <- ci[c(3:8), 1]
+ci_95 <- ci[c(3:8), 2]
+#vif to check for collinearity issues
+vif_v <- c("", round(vif(mod_list[[i]]), 3))
+
+df <- data.frame(species = s, variable = vbl, estimate = est, SE = se,
+                 tvalue = tv, CI_2.5 = ci_2.5, CI_95 = ci_95, VIF = vif_v)
+
+m1_df <- rbind(df, m1_df)
+}
+
+
+m1_df <- m1_df %>% filter(species != "NA")
+rownames(m1_df) <- NULL
+
+#save summary table as txt file
+write.table(m1_df, file = "./Code output/summary table_resource util models_case1_all spp_greenup.txt",
+            sep = ",", quote = FALSE, row.names = FALSE)
+
+
+```
+
+
+```{r}
+#-----------------------#
+# Case 2 - data prep ####
+#-----------------------#
+#load up your data
+data <- readRDS("./data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+
+# create grid for counting points based on extent of data (or study area box)
+#try 30m resolution, based on elevation grid
+grd <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Elevation_meters_30m_gye.tif")
+grd[] <- 0 #change all values to 0
+
+data <- st_transform(data, projection(grd))  #you may need to transform your point data into the projection of your gis data
+
+# if necessary, crop down the grid to the specific points in question, if necessary
+grd <- crop(grd, data, snap="out") 
+plot(grd)
+plot(sample_n(data,1000)[,"id_yr_seas"], add=T)
+
+# create a response variable (i.e,. 'count') with number of locations per cell in grd, per id
+ids <- unique(data$id_yr_seas) #loop over ids
+datC2 <- do.call(rbind, lapply(1:length(ids), function(i){
+  #rasterize the points, and tell the raster values to be the number of GPS points falling in a cell
+  rs <- rasterize(data[data$id_yr_seas == ids[i],], grd, 
+                  field="date", fun="count")
+  xy <- as.data.frame(coordinates(rs)) #grab the coordinates
+  ud <- data.frame(xy, count=values(rs)) #make a dataframe with coordiantes and count values
+  #remove the 0s (in the real world, you may not want to do this. If you leave in all the zeros though, you'd want to do a zero-inflated poisson model)
+  ud <- ud[is.na(ud$count) == FALSE,]
+  #add an id_yr_seas column
+  ud$id_yr_seas <- ids[i] 
+  # make spatially aware again
+  ud <- st_as_sf(ud, coords=c("x","y"), dim="XY", crs=projection(rs))
+  return(ud)
+}))
+head(datC2)
+# you want a nice distribution of cells with 0s and 1s, but also a bunch of 10s, 20s, etc. 
+# If you don't have many values above 1-3, than you need a larger resolution grid for above.
+hist(datC2$count)   
+table(datC2$count)
+rm(grd,ids)
+```
+
+```{r}
+# extract GIS data to points
+datC2$elev <- raster::extract(elev, st_transform(datC2, crs=projection(elev)))
+datC2$trasp <- raster::extract(trasp, st_transform(datC2, crs=projection(trasp)))
+datC2$slope <- raster::extract(slope, st_transform(datC2, crs=projection(slope)))
+datC2$tpi <- raster::extract(tpi, st_transform(datC2, crs=projection(tpi)))
+datC2$perc_Cover_Trees <-  raster::extract(RAP_raster_list[["2016_Cover_Trees"]], 
+                                             st_transform(datC2, 
+                          crs=projection(RAP_raster_list[["2016_Cover_Trees"]])))
+datC2$comb_ann_per_biomass_2016 <-  raster::extract(RAP_raster_list[["comb_ann_per_biomass_2016"]], 
+                                             st_transform(datC2, 
+                          crs=projection(RAP_raster_list[["comb_ann_per_biomass_2016"]])))
+
+
+
+
+
+head(datC2)
+
+
+```
+
+```{r}
+#----------------------------#
+# analyze case 2 data     ####
+#----------------------------#
+#start by checking correlation among the variables
+# create a vector of your variable names (mainly for continuous variables)
+variables <- c("elev","trasp","slope","tpi", "perc_Cover_Trees", "comb_ann_per_biomass_2016")
+ 
+correl <- datC2 %>% 
+  st_set_geometry(NULL) %>% 
+  select(all_of(variables)) %>% 
+  cor(use="pairwise.complete.obs", method="pearson") %>% 
+  round(3)
+
+correl
+ifelse(abs(correl)>.5, correl, NA)  # a cleaner way to look at it
+
+# looks like I shouldn't have dist2escape and slope in the same model
+# looks like I shouldn't have treecov and perennialForbGrasses in same model
+
+# look at distributions of the variables (once you run this line, go back through your plots and look what you did)
+for(i in 1:length(variables)){
+  hist(st_set_geometry(datC2,NULL)[,variables[i]], main=variables[i])
+}
+
+# get the scale of the variables similar (this helps the model fit)
+datC2$elev <- datC2$elev/10 # elev to KM
+datC2$perc_forb_grass_biomass <- datC2$comb_ann_per_biomass_2016/max(datC2$comb_ann_per_biomass_2016)
+
+# look at distributions of the variables (once you run this line, go back through your plots and look what you did)
+for(i in 1:length(variables)){
+  hist(st_set_geometry(datC2,NULL)[,variables[i]], main=variables[i])
+}
+
+# create dummy variables for landcover variable (don't forget, need to drop one in analysis)
+# table(is.na(datC2$landcov))  #this ideally should be ALL FALSE. If not, then you should remove the lines with NAs
+# datC2$landcover <- datC2$landcov
+# dum <- datC2 %>% 
+#   st_set_geometry(NULL) %>% 
+#   select(landcov) %>% 
+#   dummy.data.frame(names="landcov") #create dummy variables
+# 
+# head(dum)
+# length(unique(datC2$landcov)) == ncol(dum)   # this should be TRUE
+# # now cbind up the new columns
+# datC2 <- cbind(datC2, dum)
+# head(datC2)
+# rm(dum)
+```
+
+
+```{r}
+#add species to data for modeling
+datC2 <- datC2 %>% mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+```
+
+```{r}
+#-----------------------#
+# parameterize model ####
+#-----------------------#
+
+spp <- unique(datC2$species)
+
+mod_list <- list()
+
+for(i in 1:length(spp)){
+dat_spp <- datC2 %>% filter(species == spp[[i]])
+
+# mod1 has a random effect for animal id_yr_seas on the intercept (you should do this at a minimum)
+mod_list[[i]] <- glmer(count ~ elev + trasp + slope  + perc_forb_grass_biomass +
+               perc_Cover_Trees +
+               (1|id_yr_seas), family = poisson(link = "log"), # using a poisson link because it is count data!
+             data = dat_spp)
+}
+
+names(mod_list) <- spp
+
+
+summary(mod_list[["bighorn"]])
+round(confint.merMod(mod2, method="Wald"),3) # calculate confidence intervals
+ranef(mod2) #get random effects
+
+# compare the coefficient estimates of the two methods
+round(summary(mod1)$coefficients,3)
+round(summary(mod2)$coefficients,3)
+```
+
+```{r}
+#table of estimates, SEs, test statistics, 95% CIs, variance among random effects
+m2_df <- data.frame(species = "NA", variable = "NA", estimate = "NA", SE = "NA",
+                    tvalue = "NA", CI_2.5 = "NA", CI_95 = "NA", VIF = "NA")
+for(i in 1:length(mod_list)){
+
+vbl <- c("intercept", "elevation", "trasp", "slope", "forb/grass biomass",
+         "% tree cover")
+s <- rep(spp[i], times = 6)
+est <- round(mod_list[[i]]@beta, 3)
+se <- round(summary(mod_list[[i]])$coefficients[, 2], 3)
+tv <- round(summary(mod_list[[i]])$coefficients[, 3], 3)
+ci <- round(confint.merMod(mod_list[[i]], method="Wald"),3)
+ci_2.5 <- ci[c(2:7), 1]
+ci_95 <- ci[c(2:7), 2]
+#vif to check for collinearity issues
+vif_v <- c("", round(vif(mod_list[[i]]), 3))
+
+df <- data.frame(species = s, variable = vbl, estimate = est, SE = se,
+                 tvalue = tv, CI_2.5 = ci_2.5, CI_95 = ci_95, VIF = vif_v)
+
+m2_df <- rbind(df, m2_df)
+}
+
+
+m2_df <- m2_df %>% filter(species != "NA")
+rownames(m2_df) <- NULL
+
+#save summary table as txt file
+write.table(m2_df, file = "./Code output/summary table_resource util models_case2_all spp_greenup.txt",
+            sep = ",", quote = FALSE, row.names = FALSE)
+```
+
+

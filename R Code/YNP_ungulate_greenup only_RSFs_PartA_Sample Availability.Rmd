@@ -1,0 +1,381 @@
+---
+title: "YNP ungulate RSFs_Part A_SampleAvailability_greenup trial"
+author: "Molly Caldwell"
+date: "2/16/2022"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(stringr)
+library(move)
+library(dummies)
+library(lme4)
+library(parallel)
+library(MoveTools)
+```
+
+#Data Prep
+
+```{r}
+#load all spp GPS data- greenup
+data <- readRDS("./data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+head(data)
+```
+
+```{r}
+#---------------------------------------------------#
+# load up UDs for creating availability polygons ####
+#---------------------------------------------------#
+fls <- dir("./Code output/dBBMM_UDs_greenup/", full.names = TRUE)  #this is the folder where your BBs are stored
+# get the names out of the file info
+names <- fls %>% 
+  str_split_fixed("/", str_count(fls[1], "/")+1) %>% 
+  as.data.frame() %>% 
+  pull(str_count(fls[1], "/")+1) %>% 
+  str_replace("BBdyn_","") %>% 
+  str_replace(".tif","")
+names
+# Did all your id_yr_seas give you a home range?
+table(names %in% data$id_yr_seas)   # should all be TRUE, if not, then might want to revisit home range analyses.
+table(unique(data$id_yr_seas) %in% names)   # this should be all true as well
+# what is the volume value (i.e., contour) you'd like to create your home ranges from?
+# If using BB model, you may want to use a larger value so it 'captures' more area just outside of the use
+# so you get a good representations of unused areas
+# if using kernel methods, you may want something like a 0.95 percentile as those methods inherently 
+# provide a broader UD.
+percentile <- 0.999    # what contour percentile will you use? this is 99.9%
+#loop over files, and create a list of the UDs in raster format ####
+# prepare for parallel processing:
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("fls", "percentile", "names"))
+# now for the actual loop
+HRs <- do.call(rbind, clusterApplyLB(clust, 1:length(fls), function(i){
+  # need library() here for the packages your calculations require for your calculations
+  library(raster)
+  library(sf)
+  rast <- raster(fls[i])
+  vls <- sort(values(rast), decreasing=TRUE)
+  vlscsum <- cumsum(vls)
+  cutoff <- vls[vlscsum > percentile][1]
+  polyR <- reclassify(rast, rcl=matrix(c(0,cutoff,0,cutoff,1,1),2,3, byrow=T))
+  polyR[values(polyR)<=0] <- NA
+  polyR <- rasterToPolygons(polyR, dissolve=TRUE) #this is the spatialPolygonsDataFrame representing the contour
+  polyR <- as(polyR, "sf")    #turn into a sf object
+  names(polyR) <- c("id_yr_seas","geometry")
+  polyR$id_yr_seas <- names[i]
+  return(polyR)
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+rm(no_cores, clust)
+head(HRs)
+rm(fls, names, percentile)
+plot(HRs)
+plot(HRs[3,]) # plot a single ID
+#plot the HRs all together
+plot(extend(extent(data),10000))  
+plot(HRs[,1], add=T, col=NA)  #this plots all of your HR polygons
+plot(HRs[,1], add=T, col=adjustcolor("grey", alpha.f=.2))  #again so you can see where they overlap the most
+#plot each one with the points to verify that you like what your HRs look like
+whichID <- sample(HRs$id_yr_seas,1)    #choose an ID to look at
+plot(st_geometry(HRs[HRs$id_yr_seas == whichID,1]), main=whichID, col="lightgrey")
+plot(st_cast(st_combine(data[data$id_yr_seas == whichID,]), "LINESTRING"), add=T, col="grey")
+plot(st_geometry(data[data$id_yr_seas == whichID,]), add=T, pch=1, col="blue")
+```
+
+
+```{r}
+#--------------------------#
+# population polygon HR by species####
+#--------------------------#
+#add species variable to HRs data
+HRs <- HRs %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA")))))) 
+#spp variable to loop through
+spp <- unique(HRs$species)
+#list to save polygons
+pop_poly_spp <- list()
+for(i in 1:length(spp)){
+  
+  HR_spp <- HRs %>% filter(species == spp[[i]])
+  
+# Alternatively, if your HRs are disjoint and you want a more continuous polygon, do the following
+Pop_poly <- mcp(SpatialPoints(st_coordinates(st_union(HR_spp))[,1:2]), percent=100, unin="m")
+proj4string(Pop_poly) <- st_crs(HR_spp)$proj4string
+Pop_poly <- st_union(as(Pop_poly, "sf"))
+pop_poly_spp[[i]] <- Pop_poly
+}
+# check and make sure everything looks OK
+plot(pop_poly_spp[[1]]) 
+plot(sample_n(data, 1000)[,1], add=T, col="darkgreen", pch=".")
+# this is a nice plot to see where individuals' HRs overlap more or less
+plot(pop_poly_spp[[3]], border="blue")
+plot(st_geometry(HRs %>% filter(species == spp[[3]])), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T) 
+plot(pop_poly_spp[[1]], border="red", add = T)
+plot(st_geometry(HRs %>% filter(species == spp[[1]])), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T)#this plots all of your HR polygons with some transparency
+plot(pop_poly_spp[[2]], border="orange", add = T)
+plot(st_geometry(HRs %>% filter(species == spp[[2]])), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T)
+plot(pop_poly_spp[[4]], border="green", add = T)
+plot(st_geometry(HRs %>% filter(species == spp[[4]])), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T)  
+plot(pop_poly_spp[[5]], border="purple", add = T)
+plot(st_geometry(HRs %>% filter(species == spp[[5]])), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T)  
+legend(1, 95, legend=c("bighorn", "bison", "elk", "deer", "pronghorn"),
+       col=c("red", "orange", "blue", "green", "purple"), lty=1, cex=0.8)
+```
+
+```{r}
+#community polygon HR- all species combined
+comm_poly <- mcp(SpatialPoints(st_coordinates(st_union(HRs))[,1:2]), percent=100, unin="m")
+proj4string(comm_poly) <- st_crs(HRs)$proj4string
+comm_poly <- st_union(as(comm_poly, "sf"))
+#plot
+plot(comm_poly, border="blue")
+plot(st_geometry(HRs), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T) 
+```
+
+
+#Generate random points
+
+```{r}
+#------------------------------------------------#
+# generate random points within Population HR, looped by species ####
+#------------------------------------------------#
+#list to save points by species
+PopRand_spp <- list()
+data_pop_spp <- list()
+for(i in 1:length(pop_poly_spp)){
+  print(paste0("i: ", i))
+    
+  data_spp <- data %>% filter(species == spp[[i]])
+    
+  #general equal number of points as in data
+  PopRand <- st_sample(pop_poly_spp[[i]], size=nrow(data_spp)+1000, type="random")
+  PopRand <- PopRand[1:nrow(data_spp)]   # you have to do this because st_sample doesn't give the exact size you are looking for (might need to change the 1000 above to a bigger number!!!!)
+  nrow(data_spp)==length(PopRand)   #this MUST BE TRUE (otherwise increase the 1000 number above)
+  
+  
+  
+  #attach points to dataframe
+  data_spp$used <- 1  #add response variable
+  #turn random points into Spatial Points dataframe with the correct column names and attributes
+  head(data)
+  PopRand <- st_sf(data.frame(used=0,   # flag random points as 0s in used column
+                              id_yr_seas=data_spp$id_yr_seas,   # give random points a random id_yr_seas
+                              date=data_spp$date, # give the random points a random date as well
+                              cid=data_spp$cid,
+                              species = data_spp$species), # give random id
+                   geometry=PopRand)
+  PopRand <- st_transform(PopRand, crs=st_crs(data_spp))  # verify same projection
+  data_pop <- rbind(data_spp, PopRand) #rbind up the used and random points
+  PopRand_spp[[i]] <- PopRand
+  data_pop_spp[[i]] <- data_pop
+}
+#have a quick look at what you did
+plot(pop_poly_spp[[1]])
+plot(PopRand_spp[[1]][sample(length(PopRand_spp[[1]]),3000)], add=T, col="blue", pch=".")   #sample of available points
+plot(sample_n(data %>% filter(species == spp[[1]]),3000)[,1], add=T, col="orange", pch=".")         #sample of used points
+rm(PopRand_spp)
+nrow(data_pop_spp[[1]])
+table(data_pop_spp[[1]]$used)
+head(data_pop_spp[[1]])
+tail(data_pop_spp[[1]])
+```
+
+
+```{r}
+#-------------------------------------------------------#
+# generate random points within each individual's HR ####
+#-------------------------------------------------------#
+HRRand <- do.call(rbind, lapply(1:nrow(HRs), function(i){
+  #general equal number of points as in data
+  IdRand <- st_sample(HRs[i,], size=nrow(data[data$id_yr_seas==HRs$id_yr_seas[i],])+1000, type="random")
+  IdRand <- IdRand[1:nrow(data[data$id_yr_seas==HRs$id_yr_seas[i],])]   # you have to do this because st_sample doesn't give the exact size you are looking for (might need to change the 1000 above to a bigger number!!!!)
+  print(nrow(data[data$id_yr_seas==HRs$id_yr_seas[i],])==length(IdRand))   #this MUST BE TRUE (otherwise increase the 1000 nbumber above)
+  # turn random points into sf dataframe with the correct attributes
+  return(st_sf(data.frame(used=0, 
+                          id_yr_seas=HRs$id_yr_seas[i], 
+                          date=data$date[data$id_yr_seas==HRs$id_yr_seas[i]],   # give the random points a random date as well
+                          id=str_split_fixed(HRs$id_yr_seas[i],"_",2)[,1]), 
+               geometry=IdRand))
+}))
+#They ALL must be TRUE!!!!
+HRRand <- st_transform(HRRand, crs=st_crs(data))  # make sure the crs is correct.
+#add species variable
+HRRand <- HRRand %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA")))))) %>%
+  rename(cid = "id")
+#take a look at the points you just made within the population polygon
+head(HRRand)
+plot(pop_poly_spp[[2]])
+plot(st_geometry(HRRand %>% filter(species == "bison")), add=T, col="blue", pch=".")
+# now take alook at them for each iD
+whichID <- sample(HRs$id_yr_seas,1)
+plot(st_geometry(HRs[HRs$id_yr_seas == whichID,1]), main=whichID, col="lightgrey")
+plot(st_geometry(HRRand[HRRand$id_yr_seas == whichID,]), pch=".",col="blue", add=T)
+plot(st_geometry(data[data$id_yr_seas == whichID,]), pch=".", add=TRUE,col="orange")
+rm(whichID)
+#add used column to data
+data$used <- 1
+#rbind up the used and random points
+data_HR <- rbind(data, HRRand) 
+rm(HRRand)
+head(data_HR)
+tail(data_HR)
+```
+
+```{r}
+#-------------------------------------------------#
+# generate random points within a local buffer ####
+#-------------------------------------------------#
+# first, figure out 80% quantile of distances moved during the season of interest as the buffer
+head(data)
+data <- data %>%   #order database first
+  arrange(id_yr_seas, date)
+data$burst <- CalcBurst(data=data, id = TRUE, id_name="id_yr_seas", 
+                        date_name="date", Tmax = 3600*5) #set Tmax to 5 hours, a little more than double the fix rate
+length(unique(data$burst))
+data <- CalcMovParams(data=data, id_name = "id_yr_seas", date_name = "date", burst=data$burst)
+hist(data$rel.angle)   #this is your turning angle distribution
+hist(data$dist/1000)   #this is your step length distribution
+head(data)
+#distance distributions and resulting buffers very different depending on species, so loop by species
+#list to save data
+data_local_spp <- list()
+for(i in 1:length(spp)){
+  print(paste0("i: ", i))
+  
+    ds <- data %>% filter(species == spp[[i]])
+    
+  buf <- as.numeric(quantile(ds$dist,probs = .80, na.rm=TRUE)) # this is the buffer in meters
+  buf
+  
+  # now loop over each line in your dataset to generate a matched random point within the buffer
+  # note that this one is going to take some time!
+  # might even want to subsample, if you have LOTS of data!!!!!
+  # sfInit(parallel = T, cpus = 7)   #must change the cpus
+  # sfExport("data", "buf")
+  # sfLibrary(sf)
+  # LocalRand <- do.call(c, sfClusterApplyLB(1:nrow(data), function(i){
+  #   bufr <- st_buffer(data[i,], dist=buf) # create buffer polygon around point
+  #   return(st_sample(bufr, size=5, type="random")[1]) #sample 1 point in that polygon
+  # }))
+  # sfStop()
+  # length(LocalRand) == nrow(data)
+  # add the other columns to the sfc object
+  # LocalRand <- st_sf(data.frame(id_yr_seas=data$id_yr_seas, used=0, date=data$date, id=data$id), geometry=LocalRand)
+  
+  
+  # Alternatively, use trig to calculate the same thing as code commented out above
+  #generate random angles
+  angles <- runif(nrow(ds),0, 2*pi)
+  # generate random distances between 1 and buf
+  dists <- runif(nrow(ds),1,buf)
+  # used triginomitry to calcualte the x and y for a point at a given angle and a given distance
+  x <- st_coordinates(ds)[,1]+(cos(angles)*dists) # how far moved in x direction
+  y <- st_coordinates(ds)[,2]+(sin(angles)*dists) # how far moved in y direction
+  #turn into a dataframe
+  LocalRand <- data.frame(id_yr_seas=ds$id_yr_seas, used=0, date=ds$date, cid=ds$cid,
+                          species = ds$species, x=x, y=y)
+ 
+  # turn into a sf object
+  LocalRand <- st_as_sf(LocalRand, coords=c("x","y"), dim="XY", crs=st_crs(data))
+  
+  nrow(LocalRand) == nrow(ds) #should be TRUE
+  
+  # remove the move params
+ds$burst <- NULL
+ds$dist <- NULL
+ds$dt <- NULL
+ds$speed <- NULL
+ds$abs.angle <- NULL
+ds$rel.angle <- NULL
+ds$StepFlag <- NULL
+data_local_spp[[i]] <- rbind(ds, LocalRand) #rbind up the used and random points
+  
+}
+rm(buf, x, y, angles, dists)
+rm(LocalRand)
+head(data_local_spp[[1]])
+tail(data_local_spp[[1]])
+nrow(data_local_spp[[1]])
+#remove move params data
+data$burst <- NULL
+data$dist <- NULL
+data$dt <- NULL
+data$speed <- NULL
+data$abs.angle <- NULL
+data$rel.angle <- NULL
+data$StepFlag <- NULL
+```
+
+```{r}
+#Generate random points within community level range 
+##(combined individual HRs of all spp)
+    
+  #general equal number of points as in data
+  CommRand <- st_sample(comm_poly, size=nrow(data)+1000, type="random")
+  CommRand <- CommRand[1:nrow(data)]   # you have to do this because st_sample doesn't give the exact size you are looking for (might need to change the 1000 above to a bigger number!!!!)
+  nrow(data)==length(CommRand)   #this MUST BE TRUE (otherwise increase the 1000 number above)
+  
+  
+  
+  #attach points to dataframe
+  data$used <- 1  #add response variable
+  #turn random points into Spatial Points dataframe with the correct column names and attributes
+  head(data)
+  CommRand <- st_sf(data.frame(used=0,   # flag random points as 0s in used column
+                              id_yr_seas=data$id_yr_seas,   # give random points a random id_yr_seas
+                              date=data$date, # give the random points a random date as well
+                              cid=data$cid,
+                              species = data$species), # give random id
+                   geometry=CommRand)
+  CommRand <- st_transform(CommRand, crs=st_crs(data))  # verify same projection
+  data_comm <- rbind(data, CommRand) #rbind up the used and random points
+#have a quick look at what you did
+plot(comm_poly)
+plot(CommRand[sample(length(CommRand),3000)], add=T, col="blue", pch=".")   #sample of available points
+plot(sample_n(data,3000)[,1], add=T, col="orange", pch=".")         #sample of used points
+rm(CommRand)
+nrow(data_comm)
+table(data_comm$used)
+head(data_comm)
+tail(data_comm)
+```
+
+#Save environment
+
+```{r}
+# now that you've sampled availability, write out your environment! ####
+# save your environment so we can load it back up another time ####
+save.image("RSFs_AvailSampled.RData")
+# load("RSFs_AvailSampled.RData")
+```

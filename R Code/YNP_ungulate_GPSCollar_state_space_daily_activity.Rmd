@@ -1,0 +1,432 @@
+---
+title: "YNP ungulate state space daily activity"
+author: "Molly Caldwell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+# packages
+library(sf)
+library(lubridate)
+library(tidyverse)
+library(circular)
+library(ggplot2)
+library(activity)
+library(overlap)
+```
+
+#Prep Data
+
+```{r}
+#load species' greenup data list with triple state space model states added 
+data_list <- readRDS("./Code output/allspp_greenup_GPSdata_triplestates.rds")
+
+#create hour of GPS data column and time column
+for(i in 1:length(data_list)){
+  data_list[[i]] <- data_list[[i]] %>%
+    mutate(date = as.POSIXct(date, format = "%Y-%m-%d %H:%M:%S")) %>%
+    mutate(hr = hour(date)) %>%
+    mutate(Time = as.POSIXct(date, format = "%Y-%m-%d %H:%M:%S"))
+}
+
+
+```
+
+```{r}
+# format time to 'day units' and radians
+for(i in 1:length(data_list)){
+  data_list[[i]] <- data_list[[i]] %>%
+    mutate(Time_day = (hour(Time)*3600 + minute(Time)*60 + 
+                       second(Time))/86400) %>%
+    mutate(Time_rad = Time_day * 2 * pi)
+}
+
+
+#function for making data frame of radian time for each species' movement states
+
+rad.ms.df <- function(data){
+  move_state = unique(data$state)
+  listdf <- list()
+  for (i in move_state){
+    A <- data[data$state == move_state[[i]], ]
+    rad <- A$Time_rad
+    if (length(rad)>1) {
+    r <- as.vector(rad)
+    names(r) <- i
+    listdf[[i]] <- r 
+        }
+  }
+  return(listdf)
+}
+
+
+
+#loop radian time df function per movement state by species
+rad_ms_list <- list()
+
+for(i in 1:length(data_list)){
+ms_rad_data <- rad.ms.df(data_list[[i]])
+
+rad_ms_list[[i]] <- ms_rad_data
+}
+
+names(rad_ms_list) <- c("bighorn", "bison", "elk", "deer", "pronghorn")
+```
+
+
+#Density plots
+
+```{r}
+#fit density to move state activity by species (loop by spp was being weird, so made separate lists)
+bighorn_fitact <- list()
+  for(j in 1:length(rad_ms_list[[1]])){
+    print(paste0("j: ", j))
+    ms_data <- rad_ms_list[[1]][[j]]
+    fit_act <- fitact(ms_data)
+    bighorn_fitact[[j]] <- fit_act
+  }
+  
+bison_fitact <- list()
+  for(j in 1:length(rad_ms_list[[2]])){
+    print(paste0("j: ", j))
+    ms_data <- rad_ms_list[[2]][[j]]
+    fit_act <- fitact(ms_data)
+    bison_fitact[[j]] <- fit_act
+  }
+
+elk_fitact <- list()
+  for(j in 1:length(rad_ms_list[[3]])){
+    print(paste0("j: ", j))
+    ms_data <- rad_ms_list[[3]][[j]]
+    fit_act <- fitact(ms_data)
+    elk_fitact[[j]] <- fit_act
+  }
+
+deer_fitact <- list()
+  for(j in 1:length(rad_ms_list[[4]])){
+    print(paste0("j: ", j))
+    ms_data <- rad_ms_list[[4]][[j]]
+    fit_act <- fitact(ms_data)
+    deer_fitact[[j]] <- fit_act
+  }
+  
+pronghorn_fitact <- list()
+  for(j in 1:length(rad_ms_list[[5]])){
+    print(paste0("j: ", j))
+    ms_data <- rad_ms_list[[5]][[j]]
+    fit_act <- fitact(ms_data)
+    pronghorn_fitact[[j]] <- fit_act
+  }
+  
+
+
+plot(bighorn_fitact[[1]], yunit = "density", data = "none", tline = list(col = "red", lwd = 2), 
+     main = "Movement State Daily Periods", ylim = c(0, 0.12))
+plot(bighorn_fitact[[2]], yunit="density", data="none", add=TRUE, tline=list(col="red", lwd = 2, lty = 2))
+plot(bighorn_fitact[[3]], yunit="density", data="none", add=TRUE, tline=list(col="red", lwd = 2, lty =3))
+plot(bison_fitact[[1]], yunit = "density", data = "none", add=TRUE, tline = list(col = "orange1", lwd = 2))
+plot(bison_fitact[[2]], yunit="density", data="none", add=TRUE, tline=list(col="orange1", lwd = 2, lty = 2))
+plot(bison_fitact[[3]], yunit="density", data="none", add=TRUE, tline=list(col="orange1", lwd = 2, lty =3))
+plot(elk_fitact[[1]], yunit = "density", data = "none", add=TRUE, tline = list(col = "blue", lwd = 2))
+plot(elk_fitact[[2]], yunit="density", data="none", add=TRUE, tline=list(col="blue", lwd = 2, lty = 2))
+plot(elk_fitact[[3]], yunit="density", data="none", add=TRUE, tline=list(col="blue", lwd = 2, lty =3))
+plot(deer_fitact[[1]], yunit = "density", data = "none", add=TRUE, tline = list(col = "green4", lwd = 2))
+plot(deer_fitact[[2]], yunit="density", data="none", add=TRUE, tline=list(col="green4", lwd = 2, lty = 2))
+plot(deer_fitact[[3]], yunit="density", data="none", add=TRUE, tline=list(col="green4", lwd = 2, lty =3))
+plot(pronghorn_fitact[[1]], yunit = "density", data = "none", add=TRUE, tline = list(col = "darkviolet", lwd = 2))
+plot(pronghorn_fitact[[2]], yunit="density", data="none", add=TRUE, tline=list(col="darkviolet", lwd = 2, lty = 2))
+plot(pronghorn_fitact[[3]], yunit="density", data="none", add=TRUE, tline=list(col="darkviolet", lwd = 2, lty =3))
+legend("topleft", c("bighorn", "bison", "elk", "deer", "pronghorn", "1", "2", "3"), col= c("red", "orange1", "blue", "green4", "darkviolet", "black", "black", "black"), lty= c(1,1,1, 1, 1, 1, 2, 3), lwd = 2, title = "Species    Move State", ncol = 2)
+```
+
+```{r}
+library(mgcv)
+
+#bighorn
+data <- data_list[[1]]
+
+ms_data <- data %>%
+  count(state, hr) %>%
+  group_by(state) %>%
+  mutate(prop_count = n/sum(n))
+
+ms1_data <- ms_data %>% filter(state == 1)
+ms2_data <- ms_data %>% filter(state == 2)
+ms3_data <- ms_data %>% filter(state == 3)
+
+#GAM with cyclical smoothing term
+gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
+                   method = "REML")
+gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
+                   method = "REML")
+gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
+                   method = "REML")
+
+bh_gam_list <- list(gam1, gam2, gam3)
+
+
+#predicted values
+pred1 <- data.frame(time = ms1_data$hr,
+                       prop_count = ms1_data$prop_count,
+                       state = ms1_data$state,
+                       predicted_values = predict(gam1, newdata = ms1_data))
+
+pred2 <- data.frame(time = ms2_data$hr,
+                       prop_count = ms2_data$prop_count,
+                       state = ms2_data$state,
+                       predicted_values = predict(gam2, newdata = ms2_data))
+
+pred3 <- data.frame(time = ms3_data$hr,
+                       prop_count = ms3_data$prop_count,
+                       state = ms3_data$state,
+                       predicted_values = predict(gam3, newdata = ms3_data))
+
+bh_pred_list <- list(pred1, pred2, pred3)
+
+#bison
+data <- data_list[[2]]
+
+ms_data <- data %>%
+  count(state, hr) %>%
+  group_by(state) %>%
+  mutate(prop_count = n/sum(n))
+
+ms1_data <- ms_data %>% filter(state == 1)
+ms2_data <- ms_data %>% filter(state == 2)
+ms3_data <- ms_data %>% filter(state == 3)
+
+#GAM with cyclical smoothing term
+gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
+                   method = "REML")
+gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
+                   method = "REML")
+gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
+                   method = "REML")
+
+bi_gam_list <- list(gam1, gam2, gam3)
+
+
+#predicted values
+pred1 <- data.frame(time = ms1_data$hr,
+                       prop_count = ms1_data$prop_count,
+                       state = ms1_data$state,
+                       predicted_values = predict(gam1, newdata = ms1_data))
+
+pred2 <- data.frame(time = ms2_data$hr,
+                       prop_count = ms2_data$prop_count,
+                       state = ms2_data$state,
+                       predicted_values = predict(gam2, newdata = ms2_data))
+
+pred3 <- data.frame(time = ms3_data$hr,
+                       prop_count = ms3_data$prop_count,
+                       state = ms3_data$state,
+                       predicted_values = predict(gam3, newdata = ms3_data))
+
+bi_pred_list <- list(pred1, pred2, pred3)
+
+#elk
+data <- data_list[[3]]
+
+ms_data <- data %>%
+  count(state, hr) %>%
+  group_by(state) %>%
+  mutate(prop_count = n/sum(n))
+
+ms1_data <- ms_data %>% filter(state == 1)
+ms2_data <- ms_data %>% filter(state == 2)
+ms3_data <- ms_data %>% filter(state == 3)
+
+#GAM with cyclical smoothing term
+gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
+                   method = "REML")
+gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
+                   method = "REML")
+gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
+                   method = "REML")
+
+el_gam_list <- list(gam1, gam2, gam3)
+
+
+#predicted values
+pred1 <- data.frame(time = ms1_data$hr,
+                       prop_count = ms1_data$prop_count,
+                       state = ms1_data$state,
+                       predicted_values = predict(gam1, newdata = ms1_data))
+
+pred2 <- data.frame(time = ms2_data$hr,
+                       prop_count = ms2_data$prop_count,
+                       state = ms2_data$state,
+                       predicted_values = predict(gam2, newdata = ms2_data))
+
+pred3 <- data.frame(time = ms3_data$hr,
+                       prop_count = ms3_data$prop_count,
+                       state = ms3_data$state,
+                       predicted_values = predict(gam3, newdata = ms3_data))
+
+el_pred_list <- list(pred1, pred2, pred3)
+
+#deer
+data <- data_list[[4]]
+
+ms_data <- data %>%
+  count(state, hr) %>%
+  group_by(state) %>%
+  mutate(prop_count = n/sum(n))
+
+ms1_data <- ms_data %>% filter(state == 1)
+ms2_data <- ms_data %>% filter(state == 2)
+ms3_data <- ms_data %>% filter(state == 3)
+
+#GAM with cyclical smoothing term
+gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
+                   method = "REML")
+gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
+                   method = "REML")
+gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
+                   method = "REML")
+
+md_gam_list <- list(gam1, gam2, gam3)
+
+
+#predicted values
+pred1 <- data.frame(time = ms1_data$hr,
+                       prop_count = ms1_data$prop_count,
+                       state = ms1_data$state,
+                       predicted_values = predict(gam1, newdata = ms1_data))
+
+pred2 <- data.frame(time = ms2_data$hr,
+                       prop_count = ms2_data$prop_count,
+                       state = ms2_data$state,
+                       predicted_values = predict(gam2, newdata = ms2_data))
+
+pred3 <- data.frame(time = ms3_data$hr,
+                       prop_count = ms3_data$prop_count,
+                       state = ms3_data$state,
+                       predicted_values = predict(gam3, newdata = ms3_data))
+
+md_pred_list <- list(pred1, pred2, pred3)
+
+#pronghorn
+data <- data_list[[5]]
+
+ms_data <- data %>%
+  count(state, hr) %>%
+  group_by(state) %>%
+  mutate(prop_count = n/sum(n))
+
+ms1_data <- ms_data %>% filter(state == 1)
+ms2_data <- ms_data %>% filter(state == 2)
+ms3_data <- ms_data %>% filter(state == 3)
+
+#GAM with cyclical smoothing term
+gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
+                   method = "REML")
+gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
+                   method = "REML")
+gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
+                   method = "REML")
+
+ph_gam_list <- list(gam1, gam2, gam3)
+
+
+#predicted values
+pred1 <- data.frame(time = ms1_data$hr,
+                       prop_count = ms1_data$prop_count,
+                       state = ms1_data$state,
+                       predicted_values = predict(gam1, newdata = ms1_data))
+
+pred2 <- data.frame(time = ms2_data$hr,
+                       prop_count = ms2_data$prop_count,
+                       state = ms2_data$state,
+                       predicted_values = predict(gam2, newdata = ms2_data))
+
+pred3 <- data.frame(time = ms3_data$hr,
+                       prop_count = ms3_data$prop_count,
+                       state = ms3_data$state,
+                       predicted_values = predict(gam3, newdata = ms3_data))
+
+ph_pred_list <- list(pred1, pred2, pred3)
+
+
+colors <- c("bighorn" = "red", "bison" = "orange", "deer" = "chartreuse3", "elk" = "cornflowerblue",
+            "pronghorn" = "purple")
+
+lty <- c("state 1" = "solid", "state 2" = "longdash", "state 3" = "dotted")
+
+#species and movement state together graph
+ggplot() +
+ geom_line(data = bh_pred_list[[1]], aes(x = time, y = predicted_values, color = "bighorn", linetype = "state 1"), size = 1.1) +
+  geom_line(data = bh_pred_list[[2]], aes(x = time, y = predicted_values, color = "bighorn", linetype = "state 2"), size = 1.1) +
+  geom_line(data = bh_pred_list[[3]], aes(x = time, y = predicted_values, color = "bighorn", linetype = "state 3"), size = 1.1) +
+  geom_line(data = bi_pred_list[[1]], aes(x = time, y = predicted_values, color = "bison", linetype = "state 1"), size = 1.1) +
+  geom_line(data = bi_pred_list[[2]], aes(x = time, y = predicted_values, color = "bison", linetype = "state 2"), size = 1.1) +
+  geom_line(data = bi_pred_list[[3]], aes(x = time, y = predicted_values, color = "bison", linetype = "state 3"), size = 1.1) +
+  geom_line(data = el_pred_list[[1]], aes(x = time, y = predicted_values, color = "elk", linetype = "state 1"), size = 1.1) +
+  geom_line(data = el_pred_list[[2]], aes(x = time, y = predicted_values, color = "elk", linetype = "state 2"), size = 1.1) +
+  geom_line(data = el_pred_list[[3]], aes(x = time, y = predicted_values, color = "elk", linetype = "state 3"), size = 1.1) +
+  geom_line(data = md_pred_list[[1]], aes(x = time, y = predicted_values, color = "deer", linetype = "state 1"), size = 1.1) +
+  geom_line(data = md_pred_list[[2]], aes(x = time, y = predicted_values, color = "deer", linetype = "state 2"), size = 1.1) +
+  geom_line(data = md_pred_list[[3]], aes(x = time, y = predicted_values, color = "deer", linetype = "state 3"), size = 1.1) +
+  geom_line(data = ph_pred_list[[1]], aes(x = time, y = predicted_values, color = "pronghorn", linetype = "state 1"), size = 1.1) +
+  geom_line(data = ph_pred_list[[2]], aes(x = time, y = predicted_values, color = "pronghorn", linetype = "state 2"), size = 1.1) +
+  geom_line(data = ph_pred_list[[3]], aes(x = time, y = predicted_values, color = "pronghorn", linetype = "state 3"), size = 1.1) +
+  scale_linetype_manual(values = lty) +
+  scale_color_manual(values = colors) +
+  xlab("Hour") +
+  ylab("Proportion GPS point count") +
+  ggtitle("Predicted Movement State Proportions by Hour") +
+  labs(color = "Species", linetype = "Movement State")
+
+
+#species together, movement state separate graphs
+  ggplot() +
+ geom_line(data = bh_pred_list[[1]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
+  geom_line(data = bi_pred_list[[1]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
+  geom_line(data = el_pred_list[[1]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
+  geom_line(data = md_pred_list[[1]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
+  geom_line(data = ph_pred_list[[1]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+  scale_color_manual(values = colors) +
+  xlab("Hour") +
+  ylab("Proportion GPS point count") +
+  ggtitle("Movement State 1") +
+  labs(color = "Species")
+  
+   ggplot() +
+ geom_line(data = bh_pred_list[[2]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
+  geom_line(data = bi_pred_list[[2]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
+  geom_line(data = el_pred_list[[2]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
+  geom_line(data = md_pred_list[[2]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
+  geom_line(data = ph_pred_list[[2]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+     ylim(0, 0.2) +
+  scale_color_manual(values = colors) +
+  xlab("Hour") +
+  ylab("Proportion GPS point count") +
+  ggtitle("Movement State 2") +
+  labs(color = "Species")
+   
+    ggplot() +
+ geom_line(data = bh_pred_list[[3]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
+  geom_line(data = bi_pred_list[[3]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
+  geom_line(data = el_pred_list[[3]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
+  geom_line(data = md_pred_list[[3]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
+  geom_line(data = ph_pred_list[[3]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+  scale_color_manual(values = colors) +
+      ylim(0, 0.2) +
+  xlab("Hour") +
+  ylab("Proportion GPS point count") +
+  ggtitle("Movement State 3") +
+  labs(color = "Species")
+
+```
+
+
+
+
+
+

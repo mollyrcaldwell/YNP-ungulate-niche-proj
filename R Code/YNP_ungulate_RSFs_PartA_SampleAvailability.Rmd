@@ -1,0 +1,127 @@
+---
+title: "YNP ungulate RSFs_Part A_SampleAvailability"
+author: "Molly Caldwell"
+date: "2/16/2022"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(stringr)
+library(move)
+library(dummies)
+library(lme4)
+library(parallel)
+library(MoveTools)
+```
+
+#Data Prep
+
+```{r}
+#load all spp GPS data
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+head(data)
+
+data <- st_as_sf(data)
+```
+
+```{r}
+#Load buffer HRs for creating availability polygons
+HRs <- readRDS("./Code output/allspp_seasonal_bufferHR_3.2022.rds")
+
+#plot the HRs all together
+plot(extend(extent(data),10000))  
+plot(HRs[,1], add=T, col=NA)  #this plots all of your HR polygons
+plot(HRs[,1], add=T, col=adjustcolor("grey", alpha.f=.2))  #again so you can see where they overlap the most
+
+#plot each one with the points to verify that you like what your HRs look like
+whichID <- sample(HRs$id_yr_seas,1)    #choose an ID to look at
+plot(st_geometry(HRs[HRs$id_yr_seas == whichID,1]), main=whichID, col="lightgrey")
+plot(st_cast(st_combine(data[data$id_yr_seas == whichID,]), "LINESTRING"), add=T, col="grey")
+plot(st_geometry(data[data$id_yr_seas == whichID,]), add=T, pch=1, col="blue")
+```
+
+```{r}
+#community polygon HR- all species combined
+comm_poly <- mcp(SpatialPoints(st_coordinates(st_union(HRs))[,1:2]), percent=100, unin="m")
+proj4string(comm_poly) <- st_crs(HRs)$proj4string
+comm_poly <- st_union(as(comm_poly, "sf"))
+
+#plot
+plot(comm_poly, border="blue")
+plot(st_geometry(HRs), col=adjustcolor("grey", alpha.f=0.1), 
+     border=NA, add=T) 
+```
+
+#Generate random points
+
+```{r}
+#generate random points within community HR polygon
+#loop by species and season
+
+#list to save points by species and season
+PopRand_spp_seas <- list()
+data_pop_spp_seas <- list()
+
+for(i in 1:length(pop_poly_spp)){
+  print(paste0("i: ", i))
+    
+  data_spp <- data %>% filter(species == spp[[i]])
+    
+  #general equal number of points as in data
+  PopRand <- st_sample(pop_poly_spp[[i]], size=nrow(data_spp)+1000, type="random")
+  PopRand <- PopRand[1:nrow(data_spp)]   # you have to do this because st_sample doesn't give the exact size you are looking for (might need to change the 1000 above to a bigger number!!!!)
+  nrow(data_spp)==length(PopRand)   #this MUST BE TRUE (otherwise increase the 1000 number above)
+  
+  
+  
+  #attach points to dataframe
+  data_spp$used <- 1  #add response variable
+  #turn random points into Spatial Points dataframe with the correct column names and attributes
+  head(data)
+  PopRand <- st_sf(data.frame(used=0,   # flag random points as 0s in used column
+                              id_yr_seas=data_spp$id_yr_seas,   # give random points a random id_yr_seas
+                              date=data_spp$date, # give the random points a random date as well
+                              cid=data_spp$cid,
+                              species = data_spp$species), # give random id
+                   geometry=PopRand)
+  PopRand <- st_transform(PopRand, crs=st_crs(data_spp))  # verify same projection
+  data_pop <- rbind(data_spp, PopRand) #rbind up the used and random points
+
+  PopRand_spp[[i]] <- PopRand
+  data_pop_spp[[i]] <- data_pop
+}
+
+#have a quick look at what you did
+plot(pop_poly_spp[[1]])
+plot(PopRand_spp[[1]][sample(length(PopRand_spp[[1]]),3000)], add=T, col="blue", pch=".")   #sample of available points
+plot(sample_n(data %>% filter(species == spp[[1]]),3000)[,1], add=T, col="orange", pch=".")         #sample of used points
+
+rm(PopRand_spp)
+nrow(data_pop_spp[[1]])
+table(data_pop_spp[[1]]$used)
+head(data_pop_spp[[1]])
+tail(data_pop_spp[[1]])
+```
+
+
+#Save environment
+
+```{r}
+# now that you've sampled availability, write out your environment! ####
+# save your environment so we can load it back up another time ####
+save.image("RSFs_AvailSampled.RData")
+# load("RSFs_AvailSampled.RData")
+```
+

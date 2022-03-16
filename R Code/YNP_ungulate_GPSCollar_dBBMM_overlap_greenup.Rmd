@@ -1,0 +1,430 @@
+---
+title: "YNP Ungulate dBBMM Overlap- greenup"
+author: "Molly Caldwell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(rgeos)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(parallel)
+```
+
+#Prep Data
+
+```{r}
+#load green up data all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+
+#create list data by species for loops
+spp <- c("bighorn", "bison", "elk", "deer", "pronghorn")
+data_list <- list()
+
+for(i in 1:length(spp)){
+  data_sp <- data %>% filter(species == spp[[i]])
+  data_list[[i]] <- data_sp
+}
+
+rm(data_sp)
+```
+
+
+#Dynamic brownian bridge per id_year_seas
+
+```{r}
+#first, create raster/grid to calculate UDs over
+ext <- extent(data)
+multiplyers <- c((ext[2]-ext[1])*0.3, (ext[4]-ext[3])*0.3)   # add about 30% around the edges of your extent (you can adjust this if necessary)
+ext <- extend(ext, multiplyers)
+grd <- raster(ext)
+res(grd) <- 300     #i'm using a 300m resolution here. Might want to increase this if things are going slowly. Or decrease it if you want more precision
+ncell(grd)     # my grid has 5,612 cells at 250m resolution
+projection(grd) <- st_crs(data)$proj4string
+rm(multiplyers)
+
+#plot your grid
+plot(extent(grd))   # this is the bounding box of your grid
+plot(sample_n(data[,"cid"],1000), add=TRUE)   # add a sample of your points
+```
+
+
+```{r}
+# verify your folder to write your BBs to is what you want!
+
+fldr <- "./Code output/dBBMM_UDs_greenup/"
+dir(fldr)   # There shouldn't be any .tif files with dynBB... if so, you might want to delete them.
+
+ids <- unique(data$id_yr_seas) #loop over ids
+
+data <- data %>% # order data
+  arrange(id_yr_seas, date)
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data","fldr","ids","grd"))
+
+# now for the actual loop
+DynBB <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
+   
+  # DynBB <- do.call(rbind, lapply(1:length(ids), function(i){   # may need this line to troubleshoot inside the parrellel loop
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  library(sf)
+  
+  temp <- data[data$id_yr_seas==ids[i],]  # grab the data for the id of interest
+
+  # prep data for the dBB function
+  mov <- move(x=st_coordinates(temp)[,1], y=st_coordinates(temp)[,2], time=temp$date,
+              animal=ids[i], proj=CRS(st_crs(temp)$proj4string))   #create mov object
+  mov <- burst(mov, temp$connect[1:(nrow(temp)-1)])   #this identifies the bad points (ie > than your MaxFixInterval)
+  
+  # this is the function to calculate the dynamics BB
+  Dbb <- try(brownian.bridge.dyn(mov,
+                                 location.error=20, #this is the location error of your collars
+                                 raster=grd,
+                                 margin=11,    # margin and window.size are params of the dynBB. I have put the defaults
+                                 window.size=31,
+                                 verbose=FALSE,
+                                 burstType="yes"), 
+             silent=TRUE)
+  
+  #write out results to file too, so if there is an error you don't loose all your work!
+  if(class(Dbb)=="try-error"){  # if teh dBB failed
+    return(data.frame(id_yr_seas=ids[i], Failed=TRUE, FirstError=Dbb[1]))   #return an NA so you know there was an error
+  }else{  # if the dBB was a success
+    if(length(Dbb@layers)>1){   #check to see if it was a multi-part DBB
+      rast <- sum(Dbb)
+    }else{
+      rast <- Dbb[[1]]
+    }
+    writeRaster(rast, filename = paste0(fldr, "/BBdyn_", ids[i],".tif"), format="GTiff", overwrite=T)
+    return(data.frame(id_yr_seas=ids[i], Failed=FALSE, FirstError="None"))    # have it return the motion variance
+  }
+
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+head(DynBB)
+# were there any BBs that didn't work?
+table(DynBB$Failed)  #if any of these are TRUE, then YES
+
+
+# some code to look at your dynamic BBs
+whichID <- sample(ids, 1)    #choose an ID to look at
+rast <- raster(paste0(fldr, "/BBdyn_", whichID,".tif"))
+sum(values(rast))    #these will sum to 1, because it is a probability
+rast <- getVolumeUD(as(rast, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+plot(rast, xlim=extent(data[data$id_yr_seas == whichID,])[1:2]+c(-1000,1000),
+     ylim=extent(data[data$id_yr_seas == whichID,])[3:4]+c(-1000,1000))
+plot(data[data$id_yr_seas == whichID,"id_yr_seas"], add=T, pch=".", col="black")
+
+# remove excess objects
+rm(rast)
+
+```
+
+#Home range size
+
+```{r}
+#load each individual's bbmm raster from file
+file_list <- list.files(path = "./Code output/dBBMM_UDs_greenup/", pattern = "*.tif",
+                        full.names = TRUE)
+
+name_list <- list.files(path = "./Code output/dBBMM_UDs_greenup/", pattern = "*.tif",
+                        full.names = FALSE)
+
+name_list <- sub(".greenup*", "", name_list)
+name_list <- sub(".tiff*", "", name_list)
+
+bb_rast_list <- list()
+for(i in 1:length(file_list)){
+  bb_rast_list[[i]] <- raster(file_list[[i]])
+}
+
+names(bb_rast_list) <- name_list
+```
+
+```{r}
+# HR size for dynBB 
+# run it on multiple processors
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("bb_rast_list"))
+
+# now for the actual loop
+dynBB_HRsizes <- do.call(cbind, clusterApplyLB(clust, 1:length(bb_rast_list), function(i){
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  
+  rast2 <- bb_rast_list[[i]]
+  # rast2 <- readRDS(paste0(fldr, "/BBdyn_", ids[i],".rds"))
+  rast2 <- getVolumeUD(as(rast2, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+  hr95 <- reclassify(rast2, rcl=matrix(c(0,0.95,1,0.95,1,0),2,3, byrow=T))  # reclassify areas below your contour as 1s and above 0s.
+  hr95 <- (res(hr95)[1]*res(hr95)[2]/1000000)*table(values(hr95)==0)[1]  # this counts the number of cells that are 1s and then multiplies it by the size of each cell in KM^2
+  hr99 <- reclassify(rast2, rcl=matrix(c(0,0.99,1,0.99,1,0),2,3, byrow=T))
+  hr99 <- (res(hr99)[1]*res(hr99)[2]/1000000)*table(values(hr99)==0)[1]
+  hr50 <- reclassify(rast2, rcl=matrix(c(0,0.5,1,0.5,1,0),2,3, byrow=T))
+  hr50 <- (res(hr50)[1]*res(hr50)[2]/1000000)*table(values(hr50)==0)[1]
+  return(c(hr50,hr95,hr99))
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+dynBB_HRsizes <- as.data.frame(dynBB_HRsizes) # turn into a data frame
+rownames(dynBB_HRsizes) <- c(50, 95, 99)
+colnames(dynBB_HRsizes) <- ids  # add column names to the matrix
+round(dynBB_HRsizes,2)  #in KM^2
+
+#---------------------------#
+#  make table of results ####
+#---------------------------#
+
+tblS <- data.frame(method=c("dynBB"),
+                   season="greenup",
+                   rbind(colMeans(t(mcpS)), colMeans(t(kernShr)), #calculate means
+                         colMeans(t(regBB_HRsizes)),colMeans(t(dynBB_HRsizes))),
+                   rbind(apply(t(mcpS),2,sd)/sqrt(ncol(mcpS)), #calculate SE
+                         apply(t(kernShr),2,sd)/sqrt(ncol(mcpS)),
+                         apply(t(regBB_HRsizes),2,sd)/sqrt(ncol(mcpS)),
+                         apply(t(dynBB_HRsizes),2,sd)/sqrt(ncol(mcpS))))
+tblS
+names(tblS) <- c("method","season", "cont50_mean", "cont95_mean","cont99_mean",
+                 "cont50_se", "cont95_se","cont99_se")
+tblS
+```
+
+```{r}
+#make table of mean and sd HR size by species
+library(reshape2)
+
+HRsize_df <- melt(as.matrix(dynBB_HRsizes)) %>%
+  rename("perc_contour" = Var1, "id_yr_seas" = Var2, "area_km2" = value) %>%
+  mutate(Species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+
+HRsize_summ <- HRsize_df %>%
+  group_by(Species, perc_contour) %>%
+  summarise(avg_size = mean(area_km2), sd_size = sd(area_km2), 
+            .groups = "keep") %>%
+  mutate(avg_size = round(avg_size, digits = 4)) %>%
+  mutate(sd_size = round(sd_size, digits = 4))
+
+#write as table to use in word doc
+write.table(HRsize_summ, file = "./Code output/dynBBMM_HR size summary_by spp_greenup.txt",
+            sep = ",", quote = FALSE, row.names = FALSE)
+
+#plot mean HR size by species
+ggplot(data = HRsize_df, mapping = aes(x = as.factor(perc_contour), 
+                                   y = area_km2, fill = as.factor(perc_contour), 
+                                   color = as.factor(perc_contour))) +
+  geom_violin(size = 0.1, trim = TRUE, alpha = 0.6) +    
+  geom_jitter(size = 0.2, width = 0.05) +  
+  scale_color_manual(values = c("darkorange3", "royalblue4", "black")) +
+  scale_fill_manual(values = c("darkorange1", "royalblue3", "grey72")) +
+  xlab("Contour (%)") +
+  labs(y = expression ("Home range size in"~km^2)) +
+  theme_classic(base_size = 12) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(color = "black"),
+        legend.position = "none") +
+  facet_grid(rows = vars(Species)) + coord_flip()
+```
+
+#Kernel overlap (%overlap) of each DBBMM
+
+```{r}
+#convert each individual's raster BBMM to spatial points 
+sp_list <- list()
+
+name_list <- list.files(path = "./Code output/dBBMM_UDs_greenup/", pattern = "*.tif",
+                        full.names = FALSE)
+
+
+name_list <- sub(".tiff*", "", name_list)
+
+for(i in 1:length(bb_rast_list)){
+
+sp_sdf <- rasterToPoints(bb_rast_list[[i]], spatial = TRUE)
+
+sp_sdf@data <- sp_sdf@data %>%
+ rename(vol =  name_list[[i]])
+
+cid = name_list[[i]]
+
+df <- cbind(sp_sdf, cid = cid)
+
+df@data <- df@data %>%
+ rename(cid = paste0("X.", name_list[[i]], "."))
+
+sp_list[[i]] <- df
+
+}
+
+
+#combine list of spatial points df to one spatial points object- not working (too much memory use)
+# library(maptools)
+# # run it on multiple processors
+# # identify cores (use 1 less than you have)
+# no_cores <- detectCores()-1
+# # Setup cluster
+# clust <- makeCluster(no_cores) 
+# # export the objects you need for your calculations from your environment to each node's environment
+# clusterExport(clust, varlist=c("sp_list"))
+# 
+# 
+# sp_all <- spRbind(sp_list[[1]], sp_list[[2]])
+# 
+# for(i in 3:length(sp_list)){
+#   sp_all <- spRbind(sp_all, sp_list[[i]])
+# }
+# 
+# stopCluster(clust)
+# 
+# #save data
+# saveRDS(sp_all, "./Code output/dBBMM_UDs_greenup/allindiv_comb_2020_dbbm_spatpts_df.rds")
+```
+
+
+```{r}
+#load saved data
+sp_all <- readRDS("./Code output/dBBMM_UDs_greenup/allindiv_dbbmm_greenup_spatpts.rds")
+
+sp_nz_list <- list()
+#subset with zero values filtered
+for(i in 1:length(sp_all)){
+sp_nz <- sp_all[[i]][which(sp_all[[i]]$vol != 0), ]
+sp_nz_list[[i]] <- sp_nz
+}
+
+#combine list of spatial points df to one spatial points object
+library(maptools)
+# run it on multiple processors
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores)
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("sp_nz_list"))
+
+
+sp_nz <- spRbind(sp_nz_list[[1]], sp_nz_list[[2]])
+
+for(i in 3:length(sp_nz_list)){
+  print(paste0("i: ", i))
+  sp_nz <- spRbind(sp_nz, sp_nz_list[[i]])
+}
+
+stopCluster(clust)
+
+#calculate pairwise overlap of each HR
+HR_ol <- kerneloverlap(sp_nz[,2], method = c("BA"), percent = 95, conditional = FALSE)
+
+#reformat pairwise matrix to data frame and add species
+library(reshape)
+HRol_df <- melt(HR_ol)
+
+HRol_df <- HRol_df %>%
+ dplyr::rename("id1" = X1, "id2" = X2) %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(value = as.numeric(value)) %>%
+ dplyr::rename("prop_overlap" = value) %>%
+  #add overlap type as alphabetic order of combined species name
+  mutate(overlap_type = if_else(spp1 < spp2, paste(spp1, spp2, sep = "-"),
+                        if_else(spp2 < spp1, paste(spp2, spp1, sep = "-"),
+                        if_else(spp2 == spp1, paste(spp1, spp2, sep = "-"), 
+                                "NA")))) %>%
+  mutate(id1 = as.character(id1)) %>%
+  mutate(id2 = as.character(id2)) %>%
+  #add combined cids variable
+  mutate(conn_ids = if_else(id1 < id2, paste(id1, id2, sep = "-"),
+                        if_else(id2 < id1, paste(id2, id1, sep = "-"),
+                         if_else(id2 == id1, paste(id2, id1, sep = "-"), 
+                                 "NA")))) %>%
+  #remove combos of same ids
+  filter(id1 != id2) %>%
+  #set prop ol >1 to 1 
+  mutate(prop_overlap = if_else(prop_overlap > 1, 1, prop_overlap))
+
+  #filter out 0s (don't want to include individuals with no overlap)
+  HRol_df <- HRol_df %>% 
+    filter(prop_overlap > 0)
+
+#save data frame as csv
+write.csv(HRol_df, "./Code output/dbbmm_HR_overlap_greenup_allindiv.csv")
+```
+
+
+```{r}
+library(plotrix)
+#graph mean and sd overlap proportion by overlap type
+avg_ol_summ <- HRol_df %>%
+  group_by(overlap_type) %>%
+  summarize(mean_prop_overlap = mean(prop_overlap), 
+            sd_prop_overlap = sd(prop_overlap),
+            se_prop_overlap = std.error(prop_overlap), .groups = "keep")
+
+#save data frame as csv
+write.csv(avg_ol_summ, "./Code output/dbbdm_HR_overlap_mean and sd_greenup_allindiv.csv")
+
+#read csv if running later
+avg_ol_summ <- read.csv("./Code output/dbbdm_HR_overlap_mean and sd_greenup_allindiv.csv")
+
+#order from highest to lowest mean overlap
+avg_ol_summ <- avg_ol_summ %>%
+  arrange(mean_prop_overlap)
+
+#set overlap type as factor with levels in order of highest to lowest mean overlap
+ord <- avg_ol_summ$overlap_type
+avg_ol_summ$overlap_type <- factor(avg_ol_summ$overlap_type, levels = ord)
+
+library(ggpubr)
+library(scales)
+#graph
+av_ol_g <- ggplot(avg_ol_summ, aes(x = overlap_type, y = mean_prop_overlap, 
+                        color = overlap_type)) +
+  geom_errorbar(aes(ymin = (mean_prop_overlap - se_prop_overlap), 
+                    ymax = (mean_prop_overlap + se_prop_overlap)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  xlab("Overlap species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Home Range Overlap") +
+  theme(legend.position = "none")
+
+av_ol_g + ggpubr::rotate()
+```
+
+

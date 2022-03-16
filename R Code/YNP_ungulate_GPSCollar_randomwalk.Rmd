@@ -1,0 +1,348 @@
+---
+title: "YNP ungulate random walk"
+author: "Molly Caldwell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+# packages
+library(adehabitatLT)
+library(adehabitatHR)
+library(parallel)
+library(circular)
+library(sf)
+library(mapview)
+library(lubridate)
+library(tidyverse)
+library(moveHMM)
+#library(devtools) #use to update jerod's MoveTools package
+#install_github("jmerkle1/MerkleLab-Code-Repository", subdir="MoveTools")
+library(MoveTools)
+```
+
+#Data Prep
+
+```{r}
+#load cleaned all spp data (2 hr fixes)- can just load RDS below after data prep completed
+data <- readRDS("~/UWyo/PhD project/HOTR-proj/Data/GPS data/Cleaned/2021/allspp_elk_ph_2hr_cleaned_notseasonal_11.2021.rds")
+```
+
+```{r}
+#reduce data to green up period (March-June, months 3-6)
+
+#create month/year column
+data <- data %>% 
+  mutate(year=year(date),
+         month=month(date))
+
+#reduce your database to the green up period 
+data <- data %>% 
+  filter(month %in% c(3:6))
+
+# create a index for each cid, each year, and each season
+data <- data %>% 
+  mutate(id_yr_seas=paste(cid, year, "greenup", sep="_"))
+
+table(data$id_yr_seas)
+length(unique(data$id_yr_seas))
+```
+
+```{r}
+# figure out whether you want to keep every id_yr_seas 
+# in other words, you may want to remove some id_yr_seas' where there are too few points (e.g., animal died)
+tbl <- table(data$id_yr_seas)
+hist(tbl)  # I can see that not all animals were marked for the entire season
+sort(tbl)
+ids2keep <- names(tbl)[tbl > 1380]   #at 122 days, should have 1464 total fixes, minus 1 wk missing fixes = 1380 fixes (remove individuals with less than this)
+data <- data[data$id_yr_seas %in% ids2keep,]
+rm(tbl, ids2keep)
+length(unique(data$id_yr_seas))
+
+#remove the excess columns
+data <- data %>% 
+  dplyr::select(cid, date, species, id_yr_seas, geometry)
+head(data)
+```
+
+```{r}
+# write out as rds object (more efficient). I suggest you do this, and then 
+# you'll have a clean season database ready for each subsequent lab in the class
+saveRDS(data, file="./Data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+```
+
+```{r}
+#load green up RDS if running code after data prep
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+```
+
+
+#Calculate Movement Parameters
+
+```{r}
+data <- data %>% 
+  arrange(id_yr_seas,date) #order database first
+
+
+data$burst <- CalcBurst(data=data, id = TRUE, 
+                        id_name="id_yr_seas", 
+                        date_name="date", Tmax = 3600*5) #set Tmax to 5 hours, a little more than double the fix rate
+length(unique(data$burst))
+data <- CalcMovParams(data=data, id_name = "id_yr_seas", date_name = "date", 
+                      burst=data$burst)
+
+#loop hist by species
+spp <- unique(data$species)
+title_spp <- c("Bighorn", "Bison", "Elk", "Mule deer", "Pronghorn")
+
+for(i in 1:length(spp)){
+  data_sp <- data %>% filter(species == spp[[i]])
+
+par(mfrow = c(1, 2))
+hist(data_sp$rel.angle, main = paste0(title_spp[[i]], " turn angle"), 
+                                      xlab = "Turn angle (degrees)")   #this is your turning angle distribution
+hist(data_sp$dist/1000, main = paste0(title_spp[[i]], " step length"), 
+                                      xlab = "Step length (km)", xlim = c(0, 8))   #this is your step length distribution
+
+}
+
+```
+
+#Random Walk
+
+```{r}
+#-------------------------#
+# simulate random walk ####
+#-------------------------#
+# first calculate brownian motion scaling factor for each ID (analogous to diffusion coefficient)
+# turn our dataframe into class ltraj so we can use adehabitatHR's hbrown function
+data_ltraj <- as.ltraj(st_coordinates(data), date=data$date, 
+                       id=data$id_yr_seas, typeII=TRUE)
+summary(data_ltraj)
+
+# extract the brownian motion scaling factor from each id, 
+# so we can develop a comparable random walk model
+h <- hbrown(data_ltraj)     # larger values give smaller dispersion
+rm(data_ltraj)
+hist(h)
+
+# simulate random walk based on observed scaling factor for each id_yr_seas
+# run it on multiple processors
+ids <- unique(data$id_yr_seas) #loop over ids
+table(ids %in% names(h)) #this needs to be all true
+data <- data %>% 
+  arrange(id_yr_seas,date) # make sure you order your data before calculating MSD.
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data", "ids", "h"))
+
+# now for the actual loop
+data <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
+  # need library() here for the packages your calculations require for your calculations
+  library(adehabitatLT)
+  library(sf)
+  
+  temp <- data[data$id_yr_seas == ids[i],]
+  #calculate net squared displacement in km2 from first point
+  temp$NSD <- sqrt((st_coordinates(temp)[1,1]-st_coordinates(temp)[,1])^2 + (st_coordinates(temp)[1,2]-st_coordinates(temp)[,2])^2)/1000 # divide by 1000 to get to kms
+  temp$NSD <- temp$NSD^2
+  # plot(temp$date, temp$NSD)
+  temp$order <- 1:nrow(temp)  #going to be used to make population level MSD later
+  
+  #now simulate 100 random movements based on same scaling factor from the data h
+  rand <- do.call(cbind, lapply(1:100, function(e){
+    return(simm.brown(date=temp$date, 
+                      x0=c(st_coordinates(temp)[1,1],st_coordinates(temp)[1,2]), 
+                      h=h[names(h)==ids[i]], id="a1")[[1]]$R2n/1000000)  # the last bit of code here at the end extracts the MSD and divides by 1 million to get to KM squared
+  }))
+  # calculate means and upper and lower CIs of the 100 simulated tracks
+  temp$MSD_rand_mean <- apply(rand, 1, mean)
+  SE <- apply(rand, 1, sd)/sqrt(apply(rand, 1, length))
+  temp$MSD_rand_LCI <- temp$MSD_rand_mean-SE*1.96
+  temp$MSD_rand_UCI <- temp$MSD_rand_mean+SE*1.96
+  
+  # plot the data
+  #   plot(temp$date, temp$rand_mean, type="l", xlab="Time", ylab="MSD")
+  #   lines(temp$date, temp$rand_LCI, col="grey")
+  #   lines(temp$date, temp$rand_UCI, col="grey")
+  #   lines(temp$date, temp$NSD, col="red")
+  return(temp)
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+head(data)
+
+#divide data by 100 for MSDs and NSDs to get to KMs
+data <- data %>%
+  mutate(NSD = NSD/100) %>%
+  mutate(MSD_rand_mean = MSD_rand_mean/100) %>%
+  mutate(MSD_rand_LCI = MSD_rand_LCI/100) %>%
+  mutate(MSD_rand_UCI = MSD_rand_UCI/100)
+
+#save data
+saveRDS(data, "./Code output/allspp_greenup_randomwalk_data.rds")
+```
+
+```{r}
+#random IDs plot
+# create a vector with the colors you want for random or observed data
+cols <- c("Random walk"="#08519c",
+          "Observed"="#006d2c")
+
+numb2plot <- 10 # how many random ids would you like to plot?
+
+data %>% # sample down to a random 9 id_yr_seas
+  filter(id_yr_seas %in% sample(unique(data$id_yr_seas), numb2plot)) %>% 
+ggplot(aes(x=date)) +
+  geom_ribbon(aes(ymin=MSD_rand_LCI, ymax=MSD_rand_UCI), fill='#eff3ff', alpha=.6) +
+  geom_line(aes(y=MSD_rand_mean, color="Random walk")) +
+  geom_line(aes(y=NSD, color="Observed")) +
+  labs(x=NULL, 
+       y="Mean Squared Displacement (KMs)", 
+       color="Legend") +
+  scale_color_manual(values=cols) +
+  theme(legend.position = "top") +
+  facet_wrap(vars(id_yr_seas), scales="free")
+
+rm(i, ids, no_cores, clust, numb2plot, cols)
+
+```
+
+```{r}
+#species' plots (all species ID on 1 plot)
+spp <- unique(data$species)
+
+#function to get ggplot color hues based on number of ids
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+spp_title <- c("Bighorn", "Bison", "Elk", "Mule deer", "Pronghorn")
+
+
+for(i in 1:length(spp)){
+  data_sp <- data %>% filter(species == spp[[i]])
+  u_id <- unique(data_sp$cid)
+# create a vector with the colors you want for random or observed data
+  #need to create df length of original data with ids matched to a certain color
+  df_uid <- data.frame(cid = u_id, color = gg_color_hue(length(u_id)))
+  df_id_col <- left_join(df_uid, data_sp, by = c("cid")) %>%
+    select(c(cid, color))
+  
+  #add random walk and id colors to vector
+  plot_col <- c("gray27", df_id_col$color)
+  names(plot_col) <- c("Random Walk", df_id_col$cid)
+
+data_sp %>% 
+  ggplot(aes(x=date)) +
+    geom_ribbon(aes(ymin=MSD_rand_LCI, ymax=MSD_rand_UCI), fill='#eff3ff', alpha=.6) +
+    geom_line(aes(y=MSD_rand_mean, color = "Random Walk")) +
+    geom_line(aes(y=NSD, color= df_id_col$cid)) +
+    labs(x=NULL, 
+         y="Mean Squared Displacement (KMs)", 
+         color="", title = paste0(spp_title[[i]], " random walk")) +
+    scale_color_manual(values = plot_col) +
+    theme(legend.position = "top", plot.title = element_text(hjust = 0.5)) +
+    facet_wrap(vars(year(date)), scales="free")
+}
+
+```
+
+
+#Population Mean MSD
+
+```{r}
+# population level MSD using mean h value, loop by species
+popMSD_list <- list()
+
+for(i in 1:length(spp)){
+  print(paste0("i: ", i))
+  
+  data_sp <- data %>% filter(species == spp[[i]])
+  
+  data_ltraj <- as.ltraj(st_coordinates(data_sp), date = data_sp$date, 
+                         id = data_sp$id_yr_seas, typeII = TRUE)
+  
+  # extract the brownian motion scaling factor from each id, 
+  h <- hbrown(data_ltraj) 
+  h <- mean(h)
+  
+  popMSD <- as.data.frame(tapply(data_sp$NSD, data_sp$order, mean))  #do a mean of NSD across order (i.e., ordered steps)
+  names(popMSD) <- "MSD"
+  popMSD$date <- rownames(popMSD)
+  popMSD$MSD_SE <- as.numeric(tapply(data_sp$NSD, data_sp$order, sd))/
+    sqrt(as.numeric(tapply(data_sp$NSD, data_sp$order, length)))   # calculate Population SE
+  table(is.na(popMSD)) #should only be very few NAs at the end of the dataframe
+  
+  #now simulate random movement based on same scaling factor from the data h
+  #find id_yr_seas with the full sweet of date values
+  date_range <- data_sp$id_yr_seas[data_sp$order==max(popMSD$date)][1]
+  date_range <- range(data_sp$date[data_sp$id_yr_seas == date_range])
+  #add the ids date info to the popMSD dataframe
+  popMSD$datePOSIX <- seq(date_range[1], date_range[2], length.out=nrow(popMSD))
+  #simulate 100 random tracks with the population h
+  rand <- do.call(cbind, lapply(1:100, function(e){
+    return(simm.brown(date=popMSD$datePOSIX, 
+                      x0=c(0,0), h=h, id="a1")[[1]]$R2n/100000000)
+  }))
+  dim(rand)
+  nrow(rand)==nrow(popMSD) #should be TRUE
+  # calculate means and upper and lower CIs of the simulated random walks
+  popMSD$rand_mean <- apply(rand, 1, mean)
+  popMSD$rand_SE <- apply(rand, 1, sd)/sqrt(apply(rand, 1, length))
+  rm(rand, date_range)
+  
+  popMSD_list[[i]] <- popMSD
+
+}
+
+```
+
+```{r}
+#plot population MSD vs random walk
+# now plot population MSD vs random walk ####
+
+for(i in 1:length(popMSD_list)){
+# add the 95% CIs
+popMSD_list[[i]] <- popMSD_list[[i]] %>% 
+  mutate(rand_mean_UCI=rand_mean+1.96*rand_SE,
+         rand_mean_LCI=rand_mean-1.96*rand_SE,
+         MSD_UCI=MSD+1.96*MSD_SE,
+         MSD_LCI=MSD-1.96*MSD_SE)
+
+# create a vector with the colors
+cols <- c("Random walk"="#08519c",
+          "Observed"="red2")
+
+ggplot(popMSD_list[[i]], aes(x=datePOSIX)) +
+  geom_ribbon(aes(ymin=rand_mean_LCI, ymax=rand_mean_UCI), fill='#eff3ff', alpha=.6) +
+  geom_line(aes(y=rand_mean, color="Random walk")) +
+  geom_ribbon(aes(ymin=MSD_LCI, ymax=MSD_UCI), fill='indianred1', alpha=.6) +
+  geom_line(aes(y=MSD, color="Observed")) +
+  labs(x=NULL, 
+       y="Mean Squared Displacement (KMs)", 
+       color="Legend", title = paste0(spp_title[[i]], " population mean random walk")) +
+  scale_color_manual(values=cols) +
+  theme(legend.position = "top", plot.title = element_text(hjust = 0.5))
+
+}
+  
+rm(h)
+```
+
+
+
+
+
+
+
+

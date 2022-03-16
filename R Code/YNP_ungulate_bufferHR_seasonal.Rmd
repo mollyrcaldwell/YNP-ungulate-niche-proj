@@ -1,0 +1,86 @@
+---
+title: "YNP ungulate buffer HR seasonal"
+author: "Molly Caldwell"
+date: "3/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(parallel)
+library(dplyr)
+library(tidyr)
+```
+
+#Load GPS Data
+
+```{r}
+#load seasonal GPS data with 2 hour fixes for all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+
+data <- st_as_sf(data)
+```
+
+
+#Buffer home range
+Turns gps point path into lines and puts 200-m buffer around them.
+Buffer HRs by individual, year, and season.
+
+```{r}
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data"))
+
+u <- unique(data$id_yr_seas)
+ 
+lns <- do.call(c, lapply(1:length(u), function(e){
+
+  return(st_cast(st_combine(data[data$id_yr_seas == u[e],]), "LINESTRING"))
+
+}))
+
+lns <- data.frame(id_yr_seas = u,
+                  firstdate=do.call(c, lapply(u, 
+                function(e){min(data$date[data$id_yr_seas == e], na.rm=TRUE)})),
+              lastdate=do.call(c, lapply(u, 
+              function(e){max(data$date[data$id_yr_seas == e], na.rm=TRUE)})),
+              geometry=lns)
+
+lns <- st_as_sf(lns, sf_column_name = "geometry")
+
+# now calculate the Home range polygon for each line string
+HRs <- st_buffer(lns, dist = 200)    #200m buffer
+
+stopCluster(clust)   #stop the parallelization framework
+```
+
+```{r}
+#add species to HRs
+HRs <- HRs %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+
+#save HRs as RDS object
+saveRDS(HRs, "./Code output/allspp_seasonal_bufferHR_3.2022.rds")
+```
+

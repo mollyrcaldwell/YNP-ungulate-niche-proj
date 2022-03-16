@@ -1,0 +1,371 @@
+---
+title: "YNP ungulate state space models"
+author: "Molly Caldwell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+# packages
+library(adehabitatLT)
+library(adehabitatHR)
+library(parallel)
+library(circular)
+library(sf)
+library(mapview)
+library(lubridate)
+library(tidyverse)
+library(moveHMM)
+#library(devtools) #use to update jerod's MoveTools package
+#install_github("jmerkle1/MerkleLab-Code-Repository", subdir="MoveTools")
+library(MoveTools)
+```
+
+#Prep Data
+
+```{r}
+#load green up data all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+
+#create list data by species for loops
+spp <- c("bighorn", "bison", "elk", "deer", "pronghorn")
+data_list <- list()
+
+for(i in 1:length(spp)){
+  data_sp <- data %>% filter(species == spp[[i]])
+  data_list[[i]] <- data_sp
+}
+
+rm(data_sp)
+
+```
+
+```{r}
+## first pull out only the ID, date, and coordinates. you MUST name them exactly these things
+## to use the functions in moveHMM
+df_list <- list()
+
+for(i in 1:length(data_list)){
+  data <- data_list[[i]]
+df <- data.frame(ID=data$id_yr_seas,
+               Time=data$date,
+               X=st_coordinates(data)[,1],
+               Y=st_coordinates(data)[,2])
+
+df_list[[i]] <- df
+}
+
+rm(data, df)
+
+## this function preps the data to run a state space model
+## put in the dataframe you just made, the coordinate type and the name of the coordinate columns
+data.hmm_list <- list()
+
+for(i in 1:length(df_list)){
+data.hmm <- prepData(df_list[[i]], type="UTM", coordNames = c("X", "Y"))
+data.hmm_list[[i]] <- data.hmm
+}
+```
+
+```{r}
+## this next step will first plot the movement of each of your individuals (colored by ID)
+## and will then plot various movement parameters for each individual animal
+plot(data.hmm_list[[1]], compact = TRUE)  
+
+summary(data.hmm_list[[1]]) ##gives you summary information
+```
+
+```{r}
+## if you have steps with step length zero, you have to account for that in the models
+## by including a zero-mass starting parameter because the strictly positive distributions
+## (i.e., gamma) are inadequate to use. You can either account for this by adding in a zero-mass
+## parameter, or you can add a tiny amount of positive variation to the steps with length 0
+## we are going to do that for similicity sake. For more information about how to deal with zero-
+## inflation, you can read about it in the moveHMM vignette.
+
+## first check to see if you have any steps with length 0
+table(data.hmm_list[[1]]$step==0) ## 88 steps with step length 0
+table(data.hmm_list[[2]]$step==0) ## 146 steps with step length 0
+table(data.hmm_list[[3]]$step==0) ## 439 steps with step length 0
+table(data.hmm_list[[4]]$step==0) ## 32 steps with step length 0
+table(data.hmm_list[[5]]$step==0) ## 0 steps with step length 0
+
+## add in some very small variation for steps with length 0
+for(i in 1:length(data_list)){
+data.hmm_list[[i]]$step <- ifelse(data.hmm_list[[i]]$step==0, 
+                                  0+runif(1, 0, .001), data.hmm_list[[i]]$step)
+}
+
+## after you add in the variation, these should all be FALSE, if they are not, something is wrong
+table(data.hmm_list[[5]]$step==0)
+```
+
+#State Space Models
+
+```{r}
+#starting parameters
+## before we run models with different states, we need to set some starting parameters for the models to start from
+## we can use the mean and distribution of our actual data to decide on these
+## looking at the distribution of steps and turning angles will also let us decide what
+## distribution to use
+mean_step <- c()
+sd_step <- c()
+mean_angle <- c()
+sd_angle <- c()
+
+for(i in 1:length(data.hmm_list)){
+hist(data.hmm_list[[i]]$step, main = spp[[i]])
+hist(data.hmm_list[[i]]$angle, main = spp[[i]])
+
+mean_step <- c(mean_step, mean(data.hmm_list[[i]]$step, na.rm=T))
+sd_step <- c(sd_step, sd(data.hmm_list[[i]]$step, na.rm=T))
+
+mean_angle <- c(mean_angle, mean(data.hmm_list[[i]]$angle, na.rm=T))
+sd_angle <- c(sd_angle, sd(data.hmm_list[[i]]$angle, na.rm=T))
+}
+
+
+```
+
+to fit all of the models, we will use the fitHMM function in moveHMM
+for each of the models you run in the fitHMM function, you need to provide a starting point
+for each state you are trying to identify.
+
+the parameters depend on the distribution that you use, for the BHS data, we will use gamma and vm distribution
+you can use gamma, Weibull, log-normal, or exponential for the step lengths
+and vonMises or wrapped Cauchy for the angles
+look at the vignette for more info on what parameters you should use for each distribution
+
+if you get errors when running the models, and all data that you prepped looks correct
+the errors likely are a result of the optimizer failing to converge
+this happens if you set your initial parameters to something that doesn't quite make sense
+i.e., if your average step length is 8 m and you set the mean to 8,000 it won't converge
+so just mess around with the starting parameters until you get it to properly converge
+
+okay, now we have a general idea of our movement data and know what distribution we want to use
+we can start with the single-state model. For the single state model, choosing the starting parameters is
+pretty easy - just put in the means and sd of the steps and angles
+
+##Single State Model
+
+
+```{r}
+ss_model_list <- list()
+
+for(i in 1:length(data.hmm_list)){
+  print(paste0("i: ", i))
+# give some starting parameter values:
+mu0 <- mean_step[i] # step mean (need to set one for each state, so for single state, you only need one)
+sigma0 <- sd_step[i] # step SD 
+stepPar0 <- c(mu0,sigma0) ## combine the mean and SD into one object to fit in the model
+
+angleMean0 <- mean_angle[i] # angle mean (need to set one for each state)
+kappa0 <- sd_angle[i] # angle concentration
+anglePar0 <- c(angleMean0,kappa0) ## combine into one object
+
+## with verbose=2, you get information for each iteration, it tells you if you are getting close to the 
+## solution. You can turn that off by setting verbose=0, or if you want to see only the first and last iteration, set
+## verbose=1, The worse your starting parameters are, the longer it takes to find a solution (and more likely to fail)
+
+singleStateModel <- fitHMM(data.hmm_list[[i]], nbStates = 1, 
+                          stepPar0 = stepPar0, 
+                          anglePar0 = anglePar0, verbose=2,
+                          stepDist = "gamma", angleDist = "vm")
+
+ss_model_list[[i]] <- singleStateModel
+
+}
+
+##can look at model output
+ss_model_list[[1]] ## this gives you the mean and sd of your states (in this case a single state).
+
+# remember...
+mean(data.hmm_list[[1]]$step, na.rm=T)
+sd(data.hmm_list[[1]]$step, na.rm=T)
+
+## can look at the CI for the model
+CI(ss_model_list[[1]])
+```
+
+```{r}
+## then plot the model - this returns a plot of the distribution of step length and and a plot of the turning angle for
+## the single state
+plot(ss_model_list[[1]])
+
+## you don't get individual plots of movement for the single state model because there is no switching
+## between states. if you want a plot of movement for each individual, you can use: plot(data.hmm, compact=FALSE)
+```
+
+##Double State Model
+
+```{r}
+## give some starting parameter values, because we are trying to identify 2 states now, you need to put in
+## the starting parameters that you think are close for each state.
+
+mu0 <- c(mean_step[i], mean_step[i] * 4) # step mean (need one for each state, so should have 2)
+sigma0 <- c(sd_step[i], sd_step[i]*3) # step SD 
+stepPar0 <- c(mu0,sigma0) ## combine the mean and SD into one object for the model
+
+angleMean0 <- c(mean_angle[i], 0.25) # angle mean
+kappa0 <- c(sd_angle[i], 1) # angle concentration
+anglePar0 <- c(angleMean0,kappa0)
+
+ds_model_list <- list()
+
+for(i in 1:length(data.hmm_list)){
+## run the double state model
+doubleStateModel <- fitHMM(data.hmm_list[[i]], nbStates = 2, 
+                           stepPar0 = stepPar0,
+                           anglePar0 = anglePar0, verbose=2,
+                           stepDist = "gamma", angleDist = "vm")
+
+ds_model_list[[i]] <- doubleStateModel
+
+}
+
+##can look at model output
+ds_model_list[[5]]
+
+## can look at the CI for the model
+CI(ds_model_list[[1]])
+```
+
+```{r}
+## then plot the model - this returns a plot of the distribution of step length and and a plot of the turning angle for
+## the two states determined by the model; it then will give you an output for each indivdiual animal, with the 
+## states colored in orange and blue
+plot(ds_model_list[[5]])
+
+## this gives you a series of plots for each individual animal. The top plot shows you if they are in state 1 or 2,
+## and the bottom two plots gives you the probability that the animal is in state 1 (middle plot) or state 2 (bottom plot)
+plotStates(ds_model_list[[5]])
+```
+
+##Triple State Model
+
+```{r}
+ts_model_list <- list()
+## give some starting parameter values, this time we need three means and SDs
+for(i in 1:length(data.hmm_list)){
+mu0 <- c(50, 200, 500) # step length mean
+sigma0 <- c(50, 200, 500) # step length SD
+stepPar0 <- c(mu0,sigma0)
+
+angleMean0 <- c(0, pi, 0) # angle mean
+kappa0 <- c(0.1, 0.5, 0.1) # angle concentration
+anglePar0 <- c(angleMean0,kappa0)
+
+tripleStateModel <- fitHMM(data.hmm_list[[i]], nbStates = 3, # Note, this took about 3 minutes
+                          stepPar0 = stepPar0, 
+                          anglePar0 = anglePar0, verbose=2,
+                                                   stepDist = "gamma", angleDist = "vm")
+
+ts_model_list[[i]] <- tripleStateModel
+
+}
+
+#model output
+ts_model_list[[5]]
+
+#model CI
+CI(ts_model_list[[1]])
+
+```
+
+```{r}
+## plot the model, should have the distribution for all three states now, and will plot the states for each
+## individual in three colors
+plot(ts_model_list[[1]])
+
+## look at the states and probability that each step is in a specific state
+plotStates(ts_model_list[[1]])
+```
+
+##Mapview Plots
+
+```{r}
+# better plots of the results using mapview
+data_list[[1]]$state <- viterbi(ts_model_list[[1]])   # add states as a column in your database
+# create an sf object of each step in your database
+lns <- Points2Lines(data=data_list[[1]], 
+                    date_name="date",
+                    id_name="id_yr_seas",
+                    byid=FALSE,
+                    no_cores=11)  # must change this! Try detectCores()-1
+head(lns)
+
+# now for the actual plotting
+id2plot <- sample(unique(data_list[[1]]$id_yr_seas), 1)  # grab a random id to plot
+mapview(data_list[[1]][data_list[[1]]$id_yr_seas == id2plot,], zcol = 'state',layer.name="points") +   # plot it
+  mapview(lns[lns$id_yr_seas == id2plot,],layer.name="lines", zcol='state') # how to get color of lines to match?
+```
+
+##Model Selection
+
+```{r}
+## AIC model comparison by species loop
+#loop being weird- adding in 'i' as model name when run, ran aic for each spp separately below instead
+# aic_df <- data.frame(Model = "NA", AIC = "NA", species = "NA")
+# 
+# for(i in 1:length(ss_model_list)){
+# aic_df_sp <- AIC(ss_model_list[[i]], ds_model_list[[i]], ts_model_list[[i]]) %>%
+#   mutate(species = spp[[i]])
+# 
+# aic_df <- rbind(aic_df_sp, aic_df)
+# }
+# 
+# aic_df <- aic_df %>% filter(species != "NA")
+
+
+aic_df_1 <- AIC(ss_model_list[[1]], ds_model_list[[1]], ts_model_list[[1]]) %>%
+  mutate(species = spp[[1]])
+
+aic_df_2 <- AIC(ss_model_list[[2]], ds_model_list[[2]], ts_model_list[[2]]) %>%
+  mutate(species = spp[[2]])
+
+aic_df_3 <- AIC(ss_model_list[[3]], ds_model_list[[3]], ts_model_list[[3]]) %>%
+  mutate(species = spp[[3]])
+
+aic_df_4 <- AIC(ss_model_list[[4]], ds_model_list[[4]], ts_model_list[[4]]) %>%
+  mutate(species = spp[[4]])
+
+aic_df_5 <- AIC(ss_model_list[[5]], ds_model_list[[5]], ts_model_list[[5]]) %>%
+  mutate(species = spp[[5]])
+
+aic_df <- rbind(aic_df_1, aic_df_2, aic_df_3, aic_df_4, aic_df_5)
+
+write.table(aic_df, file = "./Code output/AICtable_state models_all spp_greenup.txt",
+            sep = ",", quote = FALSE, row.names = FALSE)
+
+```
+
+##Lab Write-Up Figures
+
+```{r}
+## to get the figures you need for the first part of your write-up, you can use the plot() and 
+## plotStates() functions in the moveHMM package. 
+
+plot(ts_model_list[[1]])
+
+plotStates(ts_model_list[[1]])
+```
+
+#Export data for daily activity pattern analysis
+
+```{r}
+# add states as a column in species' data list
+for(i in 1:length(data_list)){
+data_list[[i]]$state <- viterbi(ts_model_list[[i]])   
+}
+
+#save data
+saveRDS(data_list, "./Code output/allspp_greenup_GPSdata_triplestates.rds")
+```
+
+
+

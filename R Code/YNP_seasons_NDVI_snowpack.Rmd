@@ -1,0 +1,319 @@
+---
+title: "YNP_seasons_NDVI_snowpack"
+author: "Molly Caldwell"
+date: "3/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(parallel)
+library(lubridate)
+```
+
+#Load data
+
+```{r}
+#load all spp GPS collar data, all years/seasons
+gps_data <- readRDS("~/UWyo/PhD project/HOTR-proj/Data/GPS data/Cleaned/2021/allspp_elk_ph_2hr_cleaned_notseasonal_11.2021.rds")
+
+#define study area polygon that's 50km around edges around data 
+studyareapoly <- gps_data %>% 
+  extent() %>% 
+  extend(c(50000, 50000, 50000, 50000)) %>%  # add 50km buffer
+  extent() %>% 
+  st_bbox() %>% 
+  st_as_sfc() %>% 
+  st_sf(data.frame(id="studyarea")) #add a dataframe, so you can write it to file 
+
+st_crs(studyareapoly) <- st_crs(gps_data)   # set the projection
+```
+
+#NDVI/brown down peak dates
+
+```{r}
+# bring in SE of the fit
+SE <- stack("Z:/MODIS_NDVI/Bischof_calculations/dlcparams.grd")
+
+  ##subset years that you want (2016-2021), and create raster stack
+  yrs <- as.character(unique(year(gps_data$date)))
+  
+  SE_s <- raster()
+  
+  for(i in 1:length(yrs)){
+  SE_sub <- subset(SE, paste0("xmidS_SD_", yrs[i]))
+  
+  SE_s <- stack(SE_sub, SE_s)
+  }
+
+  ##crop to study area polygon
+  SE <- crop(SE_s, st_transform(studyareapoly, projection(SE_s)))
+
+# julian date of start of spring
+r <- stack("Z:/MODIS_NDVI/Bischof_calculations/springStart.grd")
+  
+  ##subset by years you want
+  r_s <- raster()
+  
+  for(i in 1:length(yrs)){
+  r_sub <- subset(r, paste0("X", yrs[i]))
+  
+  r_s <- stack(r_sub, r_s)
+  }
+  
+  ##crop to study area polygon
+  r <- crop(r_s, st_transform(studyareapoly, projection(r)))
+  
+  ##set SE values >8 to NA and save raster object
+  r[SE > 8] <- NA
+  saveRDS(r, "./Code output/Season Rasters/springstart_julday.rds")
+
+
+# mean date of peak NDVI
+r <- stack("Z:/MODIS_NDVI/Bischof_calculations/maxNDVIdate.grd")
+
+  ##subset by years you want
+  r_s <- raster()
+  
+  for(i in 1:length(yrs)){
+  r_sub <- subset(r, paste0("X", yrs[i]))
+  
+  r_s <- stack(r_sub, r_s)
+  }
+  
+  ##crop to study area polygon
+  r <- crop(r_s, st_transform(studyareapoly, projection(r_s)))
+
+  ##set SE values >8 to NA and save raster object
+  r[SE > 8] <- NA
+  saveRDS(r, "./Code output/Season Rasters/meanPeakNDVI_julday.rds")
+
+
+# mean date of peak brown down
+SE <- stack("Z:/MODIS_NDVI/Bischof_calculations/dlcparams.grd")
+
+  ##subset years that you want (2016-2021), and create raster stack
+  yrs <- as.character(unique(year(gps_data$date)))
+  
+  SE_s <- raster()
+  
+  for(i in 1:length(yrs)){
+  SE_sub <- subset(SE, paste0("xmidA_SD_", yrs[i])) #use xmidA instead of xmidS used for SE above
+  
+  SE_s <- stack(SE_sub, SE_s)
+  }
+
+  ##crop to study area polygon
+  SE <- crop(SE_s, st_transform(studyareapoly, projection(SE_s)))
+
+ 
+r <- stack("Z:/MODIS_NDVI/Bischof_calculations/dlcparams.grd")
+
+  ##subset by years you want
+  r_s <- raster()
+  
+  for(i in 1:length(yrs)){
+  r_sub <- subset(r, paste0("xmidA_", yrs[i]))
+  
+  r_s <- stack(r_sub, r_s)
+  }
+  
+  #crop to study area polygon
+  r <- crop(r_s, st_transform(studyareapoly, projection(r_s)))
+  
+  ##set SE values >15 to NA and save raster object
+  r[SE > 15] <- NA
+  saveRDS(r, "./Code output/Season Rasters/meanPeakBrownDown_julday.rds")
+```
+
+#Snow phenology
+
+```{r}
+#download snow depth for August-December 2021 (not on GIS drive)
+# source("Z:/Snodas/code/apiToDF.R")
+# source("Z:/Snodas/code/download_SNODAS.R")
+# download_SNODAS(params = "SnowDepth", startDate = "2021-08-01", endDate = "2021-12-31",
+#                 outDir = "~/UWyo/PhD project/HOTR-proj/Data/GIS data/")
+
+#stack snodas snow depth layers for recently downloaded files
+lf <- list.files("~/UWyo/PhD project/HOTR-proj/Data/GIS data/", pattern = glob2rx("SNODAS_2021*SnowDepth*"), full.names = TRUE)
+name_vec2 <- c(list.files("~/UWyo/PhD project/HOTR-proj/Data/GIS data/", pattern = glob2rx("SNODAS_2021*SnowDepth*")))
+
+stk_n <- stack(lf)
+
+name_vec2 <- name_vec2 %>% str_replace(".tif", "")
+
+#rename layers
+names(stk_n) <- name_vec2
+
+#crop by study area
+stk_n <- stk_n %>%
+  crop(extent(st_transform(studyareapoly, projection(.))))
+```
+
+
+```{r}
+# date the there is no snow on the ground for 7-14 days. 
+# date that there is consistent snow on the ground
+# bring in all the layers for gps data years (2016-2021)
+yrs <- as.character(unique(year(gps_data$date)))
+
+#create vector of pattern to subset by
+sd_patt <- c()
+for(i in 1:length(yrs)){sd_patt <- c(paste0("SNODAS_", yrs[i]), sd_patt)}
+
+
+#stack snodas snow depth layers for all data years
+stk <- raster()
+name_vec <- c()
+
+for(i in 1:length(sd_patt)){
+  print(i)
+lf <- list.files("Z:/Snodas/snowdepth/", pattern = sd_patt[i], full.names = TRUE)
+name_vec <- c(name_vec, list.files("Z:/Snodas/snowdepth/", pattern = sd_patt[i]))
+
+stk_lf <- stack(lf)
+
+stk <- addLayer(stk, stk_lf)
+}
+
+rm(stk_lf)
+name_vec <- name_vec %>% str_replace(".tif", "")
+
+#crop by study area
+stk <- stk %>%
+  crop(extent(st_transform(studyareapoly, projection(.))))   # doing this speeds thing up a lot!!, takes a few hrs
+
+#add new data
+stk <- addLayer(stk, stk_n)
+```
+
+
+```{r}
+#calculate snow on and snow off rasters
+
+#load source code
+source("./R Code/Source Code/CalcSnowOn.R")
+source("./R Code/Source Code/CalcSnowOff.R")
+
+#set NAs in snow data to 999 (changed snow on/off calculations in source code to ignore this value)
+stk[is.na(stk)] <- 999
+
+#rename snow depth layers
+names(stk) <- c(name_vec, name_vec2)
+
+#save snodas snowdepth 2016-2021
+writeRaster(stk,  "./Code output/SNODAS_snowdepth_2016to2021_stack", bylayer = T, overwrite = T)
+
+#snow off julian date raster (subset raster stack by each year of data)
+SnowOff_jul <- raster()
+
+for(i in 1:length(yrs)){
+  r_sub <- subset(stk, grep(yrs[i], names(stk)))
+  sn_o <- calc(r_sub, CalcSnowOff)
+  
+  SnowOff_jul <- stack(SnowOff_jul, sn_o)
+  }
+
+names(SnowOff_jul) <- yrs
+
+stackSave(SnowOff_jul, "./Code output/Season Rasters/snowOFF_julday.stk")
+
+#snow on julian date raster
+SnowOn_jul <- raster()
+
+for(i in 1:length(yrs)){
+  r_sub <- subset(stk, grep(yrs[i], names(stk)))
+  sn_o <- calc(r_sub, CalcSnowOn)
+  
+  SnowOn_jul <- stack(SnowOn_jul, sn_o) 
+}
+
+names(SnowOn_jul) <- yrs
+
+stackSave(SnowOn_jul, "./Code output/Season Rasters/snowON_julday.stk")
+
+```
+
+#Calculate study area season start/end dates
+The season start/end for the study area per year were calculated as the date where
+60% of the pixels in the study area had reached the following criteria:
+  Spring green-up: start- snow off, end- max NDVI peak
+  Summer: start - max NDVI peak, end- max peak brown down
+  Fall: start- max peak brown down, end- snow on
+  Winter: start- snow on, end- snow off
+  
+
+```{r}
+#load rasters
+snowOn <- stackOpen("./Code output/Season Rasters/snowON_julday.stk")
+snowOff <- stackOpen("./Code output/Season Rasters/snowOFF_julday.stk")
+meanPeakNDVI <- readRDS("./Code output/Season Rasters/meanPeakNDVI_julday.rds")
+meanPeakBD <- readRDS("./Code output/Season Rasters/meanPeakBrownDown_julday.rds")
+```
+
+```{r}
+#visualize data
+hist(snowOff)
+hist(snowOn)
+hist(meanPeakBD)
+hist(meanPeakNDVI)
+```
+
+```{r}
+#pull yrs of data to loop through
+yrs <- unique(year(gps_data$date))
+
+#loop through yrs, creating data frame of season starts/ends per year
+seas_list <- list()
+
+for(i in 1:length(yrs)){
+spring_start <- quantile(subset(snowOff, grep(yrs[i], names(snowOff))), 
+                         probs = 0.6, names = F, digits = 0)
+
+spring_end <- quantile(subset(meanPeakNDVI, grep(yrs[i], names(meanPeakNDVI))), 
+                         probs = 0.6, names = F, digits = 0)
+
+summer_start <- spring_end + 1 #start of next season = previous season end + 1 day
+summer_end <- quantile(subset(meanPeakBD, grep(yrs[i], names(meanPeakBD))), 
+                         probs = 0.6, names = F, digits = 0)
+
+fall_start <- summer_end + 1
+fall_end <- quantile(subset(snowOn, grep(yrs[i], names(snowOn))), 
+                         probs = 0.6, names = F, digits = 0)  
+
+winter_start <- fall_end + 1
+winter_end <- spring_start - 1
+
+yr <- yrs[i]
+
+seas_list[[i]] <- data.frame(yr, spring_start, spring_end, summer_start, summer_end,
+                        fall_start, fall_end, winter_start, winter_end)
+}
+
+#combine list of dates as one data frame
+seas_df <- bind_rows(seas_list)
+
+#reformat wide df to long df
+seas_ldf <- pivot_longer(seas_df, cols = -c("yr"), names_to = "seas_type", 
+                         values_to = "seas_jul_day")
+
+#add date column, converting julian day to date
+seas_ldf <- seas_ldf %>%
+  mutate(seas_date = as.Date(seas_jul_day, origin = paste0(yr-1, "-12-31")))
+
+#save as csv
+write.csv(seas_ldf, "./Code output/season_startend_ndvi-snowdepth_2016to2021.csv")
+```
+
+
+

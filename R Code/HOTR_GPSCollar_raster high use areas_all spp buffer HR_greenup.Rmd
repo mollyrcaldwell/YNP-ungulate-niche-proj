@@ -1,0 +1,134 @@
+---
+title: "HOTR_BufferHR_greenup_high use area raster_all spp"
+author: "Molly Caldwell"
+date: "1/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/HOTR-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(lubridate)
+library(parallel)
+library(dplyr)
+library(tidyr)
+library(stars)
+library(RWmisc)
+```
+
+```{r}
+#load HRs
+gu_hrs <- readRDS("./Code data output/HOTR_bufferHRs_200m_greenup.rds")
+
+#create list by species
+spp <- unique(gu_hrs$species)
+gu_hrs_list <- list()
+
+for(i in 1:length(spp)){
+  gu_hrs_list[[i]] <- gu_hrs %>%
+    filter(species == spp[[i]]) %>%
+    mutate(value = 1)
+}
+
+#save shapefile for each individual
+# for(i in 1:length(gu_hrs_list)){
+# for(j in 1:nrow(gu_hrs_list[[i]])){
+#   cid <- gu_hrs_list[[i]][j,]$cid_yr
+#  
+#   st_write(gu_hrs_list[[i]][j,], 
+#            paste0("~/UWyo/PhD project/HOTR-proj/Code data output/buffHR_greenup_", 
+#                   cid, ".shp"), append = FALSE)
+#   
+# }
+# }
+```
+
+#Create rasters of number of overlapping individual HRs per species
+
+```{r}
+#make study area box/polygon from a buffer around your data
+sa <- gu_hrs %>% 
+  extent() %>% 
+  extend(c(10000,10000,10000,10000)) %>%  # add 10km buffer
+  extent() %>% 
+  st_bbox() %>% 
+  st_as_sfc() %>% 
+  st_sf(data.frame(id="studyarea")) #add a dataframe, so you can write it to file 
+st_crs(sa) <- st_crs(bh_pg)   # set the projection
+
+#make empty raster with extent of study area box
+e_rast <- raster(sa, nrows = 1000, ncol = 1000)
+
+#calculate raster of number of overlapping HRs
+  ##loop by species and save raster
+    
+  for(i in 1:length(gu_hrs_list)){
+    print(i)
+    
+    ol_rast <- overlap.weight(e_rast, gu_hrs_list[[i]], count = TRUE)
+
+  writeRaster(ol_rast, filename = paste0("./Code data output/",
+               gu_hrs_list[[i]][["species"]][1], "_numOL_greenupBufferHR", ".tif"), 
+                format="GTiff", overwrite=T)
+  }
+ 
+```
+
+```{r}
+#load overlap count rasters from file
+file_list <- list.files(path = "./Code data output/",
+              pattern = "*numOL_greenupBufferHR.tif",
+               full.names = T)
+
+ol_rast_list <- list()
+
+for(i in 1:length(file_list)){
+  ol_rast_list[[i]] <- raster(file_list[[i]])
+}
+
+names(ol_rast_list) <- c("bighorn", "bison", "deer", "elk", "pronghorn")
+```
+
+```{r}
+#set raster values as a rank 0-1 (divide each value by max raster value per spp)
+
+for(i in 1:length(ol_rast_list)){
+  print(i)
+  
+rast_calc <- calc(ol_rast_list[[i]], function(x) x / max(x), 
+                filename = paste0("./Code data output/",
+                names(ol_rast_list[[i]]), "_ranked0to1", ".tif"), 
+                format="GTiff", overwrite=T)
+}
+```
+
+
+
+
+
+```{r}
+#rasterize species hrs by individual and save as tif
+# for(i in 1:length(gu_hrs_list)){
+#   for(j in 1:nrow(gu_hrs_list[[i]])){
+#     ss <- gu_hrs_list[[i]] %>% dplyr::select(value, geometry)
+#     sr <- ss[j,]
+#     cid <- gu_hrs_list[[i]][j,]$cid_yr
+#     
+#   rast_hrs <- st_rasterize(sr)
+#   
+#   write_stars(rast_hrs, paste0("./Code data output/buffHR_greenup_raster_", cid,
+#                                "_", spp[[i]], ".tif"))
+#   }
+# }
+
+```
+
+

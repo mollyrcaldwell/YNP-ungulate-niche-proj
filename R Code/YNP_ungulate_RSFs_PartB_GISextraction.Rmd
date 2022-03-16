@@ -1,0 +1,189 @@
+---
+title: "YNP ungulate RSFs Part B GIS Extraction"
+author: "Molly Caldwell"
+date: "2/16/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(stringr)
+library(move)
+library(dummies)
+library(lme4)
+library(parallel)
+library(lubridate)
+```
+
+#Load sampled RSFs environment
+From part A code
+
+```{r}
+load("RSFs_AvailSampled.RData")
+```
+
+#Relate GIS to points
+
+```{r}
+#bring in all your GIS data
+elev <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Elevation_meters_30m_gye.tif")
+trasp <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Aspect_TRASP_30m_gye.tif")
+slope <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Slope_degrees_30m_gye.tif")
+#not loading tpi b/c it is highly correlated with slope and left out of models
+
+#RAP data (forbs grass biomass and %cover by land cover type per year)
+RAP_ann_biomass_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Biomass*AnnualForbsGrasses*"),
+                        full.names = TRUE)
+
+RAP_per_biomass_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Biomass*PerennialForbsGrasses*"),
+                        full.names = TRUE)
+
+RAP_treecov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Cover_Trees*"),
+                        full.names = TRUE)
+
+RAP_ann_biomass_list <- list()
+for(i in 1:length(RAP_ann_biomass_file_list)){
+  print(i)
+RAP_ann_biomass_list[[i]] <- raster(RAP_ann_biomass_file_list[[i]])
+}
+
+RAP_ann_biomass_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_ann_biomass_file_list)
+RAP_ann_biomass_names <- sub("*.tif", "", RAP_ann_biomass_names)
+names(RAP_ann_biomass_list) <- RAP_ann_biomass_names
+
+RAP_per_biomass_list <- list()
+for(i in 1:length(RAP_per_biomass_file_list)){
+  print(i)
+RAP_per_biomass_list[[i]] <- raster(RAP_per_biomass_file_list[[i]])
+}
+
+RAP_per_biomass_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_per_biomass_file_list)
+RAP_per_biomass_names <- sub("*.tif", "", RAP_per_biomass_names)
+names(RAP_per_biomass_list) <- RAP_per_biomass_names
+
+RAP_treecov_list <- list()
+for(i in 1:length(RAP_treecov_file_list)){
+  print(i)
+RAP_treecov_list[[i]] <- raster(RAP_treecov_file_list[[i]])
+}
+
+RAP_treecov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_treecov_file_list)
+RAP_treecov_names <- sub("*.tif", "", RAP_treecov_names)
+names(RAP_treecov_list) <- RAP_treecov_names
+```
+
+```{r}
+#add perennial and annual grass and forb biomass rasters by year
+RAP_forbgrass_biomass <- list()
+
+for(i in 1:length(RAP_per_biomass_list)){
+  print(paste0("i: ", i))
+  
+  biomass_stack <- stack(RAP_ann_biomass_list[[i]], RAP_per_biomass_list[[i]])
+  ann_per_biomass <-  calc(biomass_stack, sum)
+  
+  RAP_forbgrass_biomass[[i]] <- ann_per_biomass
+}
+
+names(RAP_forbgrass_biomass) <- c("forb_grass_biomass_2016", 
+                                  "forb_grass_biomass_2017",
+                                  "forb_grass_biomass_2018",
+                                  "forb_grass_biomass_2019",
+                                  "forb_grass_biomass_2020")
+
+#duplicate 2020 rap biomass and tree cov as 6th list object in order to run extract raster on 2021 data
+RAP_forbgrass_biomass[[6]] <- RAP_forbgrass_biomass[[5]]
+RAP_treecov_list[[6]] <- RAP_treecov_list[[5]]
+```
+
+
+```{r}
+# extract GIS data to points
+# for community scale 
+data_comm$elev <- raster::extract(elev, st_transform(data_comm, crs=projection(elev)))
+data_comm$trasp <- raster::extract(trasp, st_transform(data_comm, crs=projection(trasp)))
+data_comm$slope <- raster::extract(slope, st_transform(data_comm, crs=projection(slope)))
+
+#extract rap data by year of gps dates
+  #split data into list based on years, then rbind data back together at end
+yrs <-c(2016, 2017, 2018, 2019, 2020, 2021)
+data_comm_yr <- list()
+
+for(i in 1:length(yrs)){
+  data_comm_yr[[i]] <- data_comm %>% filter(year(date) == yrs[[i]])
+}
+
+
+for(i in 1:length(data_comm_yr)){
+  data_comm_yr[[i]]$forbgrass_biomass <- raster::extract(RAP_forbgrass_biomass[[i]], 
+                    st_transform(data_comm_yr[[i]], crs=projection(RAP_forbgrass_biomass[[i]])))
+  
+    data_comm_yr[[i]]$perc_treecov <- raster::extract(RAP_treecov_list[[i]], 
+                    st_transform(data_comm_yr[[i]], crs=projection(RAP_treecov_list[[i]])))
+}
+
+#bind together each listed data per year as 1 data set
+data_comm <- rbind(data_comm_yr[[1]], data_comm_yr[[2]], data_comm_yr[[3]],
+                   data_comm_yr[[4]], data_comm_yr[[5]], data_comm_yr[[6]])
+```
+
+```{r}
+#remove your rasters to clean up your environment
+rm(elev, trasp, slope)
+```
+
+#Prepare data for analysis
+
+```{r}
+#take databases out of sf format, and into a simple data frame.
+data_HR <- data_HR %>% 
+  mutate(x=st_coordinates(.)[,1],
+         y=st_coordinates(.)[,2]) %>% 
+  st_drop_geometry()
+
+data_pop <- data_pop %>% 
+  mutate(x=st_coordinates(.)[,1],
+         y=st_coordinates(.)[,2]) %>% 
+  st_drop_geometry()
+
+data_local <- data_local %>% 
+  mutate(x=st_coordinates(.)[,1],
+         y=st_coordinates(.)[,2]) %>% 
+  st_drop_geometry()
+
+data_comm <- data_comm %>%
+   mutate(x=st_coordinates(.)[,1],
+         y=st_coordinates(.)[,2]) %>% 
+  st_drop_geometry()
+```
+
+#Save environment
+
+```{r}
+# now that you've extracted your GIS data, write out your environment! ####
+# save your environment so we can load it back up another time 
+save.image("RSFs_VariablesExtracted.RData")
+```
+
+
+
+
+
+
+
+
+
+
+
