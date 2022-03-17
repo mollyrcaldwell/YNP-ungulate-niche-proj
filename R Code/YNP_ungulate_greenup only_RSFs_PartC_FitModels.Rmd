@@ -1,7 +1,7 @@
 ---
 title: "YNP ungulates RSFs Part C Fit Models"
 author: "Molly Caldwell"
-date: "3/16/2022"
+date: "2/16/2022"
 output: html_document
 ---
 
@@ -33,59 +33,45 @@ library(glmmTMB)
 load("RSFs_VariablesExtracted.RData")
 ```
 
-#Population scale analyses by species and season
+#Population scale analyses
 
 ```{r}
-# get the scale of the variables similar and check for variable correlation
+#-----------------------------------------#
+# analyze population range scale data ####
+#-----------------------------------------#
 
-for(i in 1:15){ #take only non-winter data-list, run winter in a separate loop for snow depth
-data_list[[i]]$elev <- data_list[[i]]$elev/1000 # elev to KM
+# get the scale of the variables similar (grab same code from lab 3)
+data_pop$Dist2roads <- data_pop$Dist2roads/1000 #Dist2roads to km
+data_pop$Dist2Escape <- data_pop$Dist2Escape/1000 # Dist2Escape to km
+data_pop$elev <- data_pop$elev/1000 # elev to KM
 
-data_list[[i]]$rank_forbgrass_biomass <- 
-  data_list[[i]]$forbgrass_biomass/max(data_list[[i]]$forbgrass_biomass) #rank biomass
-
-data_list[[i]]$rank_treecov <- data_list[[i]]$perc_treecov/100 #rank tree cover
-
-#check correlation
-print(paste(data_list[[i]]$species[1], data_list[[i]]$season[1], sep = "-"))
-
-variables <- c("elev","trasp","slope","tpi", "rank_forbgrass_biomass", "rank_treecov")
-
-correl <- data_list[[i]] %>% 
+#start by checking correlation
+variables <- c("elev","trasp","slope","tpi","Dist2Escape","Dist2roads","treecov",
+               "iNDVI19","AnnualForbGrass","BareGround","PerennialForbGrass")
+correl <- data_pop %>% 
   dplyr::select(all_of(variables)) %>% 
   cor(use="pairwise.complete.obs", method="pearson") %>% 
   round(3)
 
-print(ifelse(abs(correl)>.4, correl, NA))  # a cleaner way to look at it
-}
+correl
+ifelse(abs(correl)>.4, correl, NA)  # a cleaner way to look at it
 
+# note that Dist2Escape and slope should not be in the same model
+# also, treecov and PerennialForbGrass should also not be in same model
 
-for(i in 16:20){ #winter data list elements
-data_list[[i]]$elev <- data_list[[i]]$elev/1000 # elev to KM
+# create dummy variables for landcover variable (don't forget, need to drop one in analysis)
+table(is.na(data_pop$landcov))  #this ideally should be ALL FALSE. If not, then you should remove the lines with NAs
+data_pop$landcover <- data_pop$landcov
+dum <- data_pop %>% 
+  dplyr::select(landcov) %>% 
+  dummy.data.frame(names="landcov") #create dummy variables
 
-data_list[[i]]$rank_forbgrass_biomass <- 
-  data_list[[i]]$forbgrass_biomass/max(data_list[[i]]$forbgrass_biomass) #rank biomass
-
-data_list[[i]]$rank_treecov <- data_list[[i]]$perc_treecov/100 #rank tree cover
-
-data_list[[i]]$rank_snowdepth <- data_list[[i]]$snowdepth/max(data_list[[i]]$snowdepth,
-                                                              na.rm = T)
-
-#check correlation
-print(names(data_list[[i]]))
-
-variables <- c("elev","trasp","slope","tpi", "rank_forbgrass_biomass", "rank_treecov",
-               "rank_snowdepth")
-
-correl <- data_list[[i]] %>% 
-  dplyr::select(all_of(variables)) %>% 
-  cor(use="pairwise.complete.obs", method="pearson") %>% 
-  round(3)
-
-print(ifelse(abs(correl)>.4, correl, NA))  # a cleaner way to look at it
-}
-
-
+head(dum)
+length(unique(data_pop$landcov)) == ncol(dum)   # this should be TRUE
+# now cbind up the new columns
+data_pop <- cbind(data_pop, dum)
+head(data_pop)
+rm(dum)
 ```
 
 ```{r}
@@ -126,113 +112,64 @@ nrow(data_pop)   # Hopefully you aren't deleting too many.
 # population range scale model development ####
 #---------------------------------------------#
 
+# build a full model here with all of your variables...
+full_pop <- glmer(used ~ elev + trasp + slope + tpi + Dist2roads + treecov + 
+                    iNDVI19 + AnnualForbGrass + BareGround + PerennialForbGrass + 
+                    landcovforest + (1|id_yr_seas), #think about your random effects!
+                  family = binomial(link = "logit"), data = data_pop, na.action="na.fail")
+
+
+summary(full_pop)
+confint(full_pop, method="Wald")
+
 # There is another method for fitting RSFs in Muff et al. 2020 (Methods in Ecology and Evolution). They glmmTMB package to fit. 
-
-#loop by seasons other than winter
-pop_rsf_list <- list()
-
-for(i in 1:15){
-model <- glmmTMB(used ~ elev + trasp + slope + tpi + rank_forbgrass_biomass +
-                   rank_treecov + (1|id_yr_seas) + (0+elev|id_yr_seas) + (0+trasp|id_yr_seas) + 
-                   (0+slope|id_yr_seas) + (0+tpi|id_yr_seas) + 
-                   (0+rank_forbgrass_biomass|id_yr_seas) + 
-                   (0+rank_treecov|id_yr_seas),
-                               family = binomial(), data = data_list[[i]], na.action="na.fail")
-
-pop_rsf_list[[i]] <- model
-}
-
-#loop by winter
-for(i in 16:20){
-  print(i)
-model <- glmmTMB(used ~ elev + trasp + slope + tpi + rank_forbgrass_biomass +
-                   rank_treecov + rank_snowdepth + (1|id_yr_seas) + (0+elev|id_yr_seas) + (0+trasp|id_yr_seas) + 
-                   (0+slope|id_yr_seas) + (0+tpi|id_yr_seas) + 
-                   (0+rank_forbgrass_biomass|id_yr_seas) + 
-                   (0+rank_treecov|id_yr_seas) + (0+rank_snowdepth|id_yr_seas),
-                               family = binomial(), data = data_list[[i]], na.action="na.omit") #some snow depth NAs
-
-pop_rsf_list[[i]] <- model
-}
-
-names(pop_rsf_list) <- names(data_list)
-
-summary(pop_rsf_list[[1]])
-confint(pop_rsf_list[[1]])
-coefficients(pop_rsf_list[[1]])  # have a look at the coefficients for each id_yr_seas
+full_pop_RandSlopes <- glmmTMB(used ~ elev + trasp + slope + tpi + Dist2roads + treecov + 
+                                 iNDVI19 + AnnualForbGrass + BareGround + PerennialForbGrass + 
+                                 landcovforest + (1|id_yr_seas) + (0+elev|id_yr_seas) + (0+trasp|id_yr_seas)
+                               + (0+slope|id_yr_seas)+ (0+tpi|id_yr_seas)+ (0+Dist2roads|id_yr_seas)
+                               + (0+treecov|id_yr_seas)+ (0+iNDVI19|id_yr_seas)+ (0+AnnualForbGrass|id_yr_seas)
+                               + (0+BareGround|id_yr_seas)+ (0+PerennialForbGrass|id_yr_seas)+ (0+landcovforest|id_yr_seas), #think about your random effects!
+                               family = binomial(), data = data_pop, na.action="na.fail")
+summary(full_pop_RandSlopes)
+confint(full_pop_RandSlopes)
+coefficients(full_pop_RandSlopes)  # have a look at the coefficients for each id_yr_seas
 
 # now you need to do all this coding in the analysis section for the other two RSF scales
 
-hist(coefficients(pop_rsf_list[[1]])[[1]][[1]]$elev)
+hist(coefficients(full_pop_RandSlopes)[[1]][[1]]$elev)
 abline(v=-2.850350)  # this is the main effect (i.e., population level effect) copied from the conditional model's Estimate
 
 ```
 
-```{r}
-save.image("RSFs_pop_spp_seas.RData")
-```
+#Analyze Home Range Scale Data
 
-#Results tables
+#Analyze Local (buffer) Scale Data
 
-```{r}
-result_df <- data.frame(Species = "NA", Season = "NA", 
-                Variable = "NA", Estimate = "NA", SE = "NA", CI_low = "NA", CI_high = "NA",
-                Pvalue = "NA")
+#Analyze Community (all spp populations) Data
+#do nested variable|species/idyrseason by each variable for random effects
 
-
-for(i in 1:length(pop_rsf_list)){
-  Species = str_replace(names(pop_rsf_list)[i], "\\..*", "")
-  Season = str_replace(names(pop_rsf_list)[i], ".*\\.", "")
-  Variable = rownames(summary(pop_rsf_list[[i]])[["coefficients"]][["cond"]])
-  Estimate = round(summary(pop_rsf_list[[i]])[["coefficients"]][["cond"]][,1], 
-                   digits = 2)
-  SE = round(summary(pop_rsf_list[[i]])[["coefficients"]][["cond"]][,2], 
-                   digits = 2)
-  Pvalue = round(summary(pop_rsf_list[[i]])[["coefficients"]][["cond"]][,4], 
-                   digits = 4)
-  CI_low = round(confint(pop_rsf_list[[i]])[c(1:length(Estimate)),1], digits = 2)
-  CI_high = round(confint(pop_rsf_list[[i]])[c(1:length(Estimate)),2], digits = 2)
-  
-df <- cbind(Species, Season, Variable, Estimate, SE, CI_low, CI_high, Pvalue)
-
-result_df <- rbind(df, result_df)
-}
-
-result_df <- result_df %>% filter(Species != "NA") %>%
-  arrange(Species, Season)
-
-rownames(result_df) <- NULL
-
-#save as text file
-write.table(result_df, file = "./Code output/summary table_popRSFs_all spp by seas.txt",
-            sep = ",", quote = FALSE, row.names = FALSE)
-```
-
-#Plots
+#Population scale analyses
 
 ```{r}
-graph_tbl <- result_df %>% filter(Variable != "(Intercept)") %>%
-  mutate(Variable = factor(Variable, levels = c("rank_snowdepth", 
-                    "rank_forbgrass_biomass", "rank_treecov", "trasp", "tpi",
-                    "slope", "elev")))
+#-----------------------------------------#
+# analyze community range scale data ####
+#-----------------------------------------#
 
-#plot coefficient estimates by spp and season
-ggplot(graph_tbl, aes(x = Variable, y = as.numeric(Estimate), color = Season)) +
-  geom_hline(yintercept = 0, colour = gray(1/2), lty = 2) +
-  geom_point(aes(x = Variable, 
-                 y = as.numeric(Estimate)), 
-             position = position_dodge(0.5)) + 
-  geom_linerange(aes(x = Variable, 
-                     ymin = as.numeric(CI_low),
-                     ymax = as.numeric(CI_high)),
-                 lwd = 1, position = position_dodge(0.5)) +
-    facet_wrap(~Species) +
-  ylab("Coefficient estimate") +
-  coord_flip()
+# get the scale of the variables similar (grab same code from lab 3)
+data_comm$elev <- data_comm$elev/1000 # elev to KM
+data_comm$perc_forbgrass_biomass <- (data_comm$forbgrass_biomass/max(data_comm$forbgrass_biomass))*100
+
+#start by checking correlation
+variables <- c("elev","trasp","slope", "perc_treecov", "perc_forbgrass_biomass")
+correl <- data_comm %>% 
+  dplyr::select(all_of(variables)) %>% 
+  cor(use="pairwise.complete.obs", method="pearson") %>% 
+  round(3)
+
+correl
+ifelse(abs(correl)>.4, correl, NA)  # a cleaner way to look at it
+
 ```
-
-
-#Extra code
 
 ```{r}
 # ----------------------------------#
@@ -302,7 +239,9 @@ abline(v=-2.850350)  # this is the main effect (i.e., commulation level effect) 
 
 
 
-
+```{r}
+save.image("RSFs_comm.RData")
+```
 
 
 
