@@ -1,0 +1,93 @@
+---
+title: "YNP ungulates Calculate Movement Parameters"
+author: "Molly Caldwell"
+date: "3/18/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(MoveTools)
+```
+
+#Load cleaned GPS data
+
+```{r}
+# gps data, all species, pronghorn and elk sampled to 2hr
+#individuals with missing seasonal data removed
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+
+#set as sf object
+data_all <- st_as_sf(data_all)
+```
+
+##Calculate basic movement parameters
+
+```{r}
+#loop by species
+spp <- unique(data_all$species)
+
+#set fix rate
+fix_rate <- 2
+
+#empty list to save data
+data_mp_list <- list()
+
+
+#movement parameters for loop
+for(i in 1:length(spp)){
+
+data_spp <- data_all %>% filter(species == spp[[i]])
+data_spp <- data_spp[order(data_spp$id_yr_seas, data_spp$date),] #order database first
+data_spp$date2 <- as.POSIXct(data_spp$date, tz = "MST")
+
+data_spp$burst <- CalcBurst(data = data_spp, id = TRUE, id_name="id_yr_seas", 
+                             date_name= "date2", Tmax = 3600*((fix_rate*2) + 1)) #set Tmax to a little more than double the fix rate
+length(unique(data_spp$burst))
+
+data_spp <- CalcMovParams(data=data_spp, id_name = "id_yr_seas", 
+                           date_name = "date", burst=data_spp$burst)
+
+
+hist(data_spp$rel.angle, main = paste0("Turn angle ", spp[[i]])) #should be able to see forward motion here if GPS fix rate is small enough
+hist(data_spp$dt/3600, main = paste0("Fix rate ", spp[[i]])) #this shows your fix rate really well (in hrs)
+hist(data_spp$speed*3600/1000, main = paste0("Speed km/hr ", spp[[i]])) # in km/hour
+
+#save data to list
+data_mp_list[[i]] <- data_spp
+
+}
+
+```
+
+```{r}
+#only run chunk if unreasonable speeds need to be taken out
+#filter all speeds > 5 m/s (18 km/hr)
+ # data_all <- rbind(data_mp_list[[1]], data_mp_list[[2]], data_mp_list[[3]],
+#                   data_mp_list[[4]], data_mp_list[[5]])
+# 
+# data_all <- data_all %>% filter(speed < 5)
+# 
+# #save data and reload & recalc move params to save below
+# data_all <- data_all %>% select(names(data))
+# 
+# saveRDS(data_all, "./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+```
+
+
+```{r}
+#save data
+data_all <- rbind(data_mp_list[[1]], data_mp_list[[2]], data_mp_list[[3]],
+                  data_mp_list[[4]], data_mp_list[[5]])
+
+saveRDS(data_all, "./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+```

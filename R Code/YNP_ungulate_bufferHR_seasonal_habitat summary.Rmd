@@ -1,0 +1,413 @@
+---
+title: "YNP Ungulates Seasonal Buffer Home Range Habitat Summary"
+author: "Molly Caldwell"
+date: "3/28/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(parallel)
+library(dplyr)
+library(tidyr)
+library(ecospat)
+```
+
+#Load previously calculated buffer home ranges and habitat rasters
+
+```{r}
+#created by cid and season, in bufferhomerange_season code
+buffHR <- readRDS("./Code output/allspp_seasonal_bufferHR_3.2022.rds")
+```
+
+```{r}
+#convert buffHR to dataframe and shapefile to use in arcgis
+library(data.table)
+
+buffHR_dt_list <- list()
+
+for(i in 1:nrow(buffHR)){
+dt_list <- map(buffHR[i, ], as.data.table)
+dt <- rbindlist(dt_list, fill = TRUE, idcol = F)
+
+buffHR_dt_list[[i]] <- dt
+}
+
+
+
+dt_list <- map(buffHR_dt_list, as.data.table)
+buffHR_dt <- rbindlist(dt_list, fill = TRUE, idcol = F)
+
+  ##add species and season to data
+  buffHR_dt <- buffHR_dt %>%
+    mutate(species = if_else(str_detect(id_yr_seas, 'BI'), "bison",
+                   if_else(str_detect(id_yr_seas, 'BH'), "bighorn",
+                   if_else(str_detect(id_yr_seas, 'MD'), "deer",
+                   if_else(str_detect(id_yr_seas, 'EL'), "elk",
+                   if_else(str_detect(id_yr_seas, 'PR'), "pronghorn", "NA")))))) %>%
+    mutate(season = if_else(str_detect(id_yr_seas, 'winter'), "winter",
+                   if_else(str_detect(id_yr_seas, 'summer'), "summer",
+                   if_else(str_detect(id_yr_seas, 'spring'), "spring",
+                   if_else(str_detect(id_yr_seas, 'fall'), "fall", "NA")))))
+
+#save bufferHR as shapefile to use in arcgis
+st_write(pg_sf, dsn = "./Code data output", layer = "HOTR_bufferHR_seasonal_allspp", 
+         driver = 'ESRI Shapefile')
+
+```
+
+#Load GIS data (topographic and habitat)
+
+```{r}
+#bring in all your GIS data
+elev <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Elevation_meters_30m_gye.tif")
+trasp <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Aspect_TRASP_30m_gye.tif")
+slope <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Slope_degrees_30m_gye.tif")
+tpi <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/TPI_unitless_30m_gye.tif")
+
+
+#RAP data (forbs grass biomass and %cover by land cover type per year)
+RAP_ann_biomass_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Biomass*AnnualForbsGrasses*"),
+                        full.names = TRUE)
+
+RAP_per_biomass_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Biomass*PerennialForbsGrasses*"),
+                        full.names = TRUE)
+
+RAP_treecov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Cover_Trees*"),
+                        full.names = TRUE)
+
+RAP_shrubcov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Cover_Shrubs*"),
+                        full.names = TRUE)
+
+RAP_ann_biomass_list <- list()
+for(i in 1:length(RAP_ann_biomass_file_list)){
+  print(i)
+RAP_ann_biomass_list[[i]] <- raster(RAP_ann_biomass_file_list[[i]])
+}
+
+RAP_ann_biomass_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_ann_biomass_file_list)
+RAP_ann_biomass_names <- sub("*.tif", "", RAP_ann_biomass_names)
+names(RAP_ann_biomass_list) <- RAP_ann_biomass_names
+
+RAP_per_biomass_list <- list()
+for(i in 1:length(RAP_per_biomass_file_list)){
+  print(i)
+RAP_per_biomass_list[[i]] <- raster(RAP_per_biomass_file_list[[i]])
+}
+
+RAP_per_biomass_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_per_biomass_file_list)
+RAP_per_biomass_names <- sub("*.tif", "", RAP_per_biomass_names)
+names(RAP_per_biomass_list) <- RAP_per_biomass_names
+
+RAP_treecov_list <- list()
+for(i in 1:length(RAP_treecov_file_list)){
+  print(i)
+RAP_treecov_list[[i]] <- raster(RAP_treecov_file_list[[i]])
+}
+
+RAP_treecov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_treecov_file_list)
+RAP_treecov_names <- sub("*.tif", "", RAP_treecov_names)
+names(RAP_treecov_list) <- RAP_treecov_names
+
+RAP_shrubcov_list <- list()
+for(i in 1:length(RAP_shrubcov_file_list)){
+  print(i)
+RAP_shrubcov_list[[i]] <- raster(RAP_shrubcov_file_list[[i]])
+}
+
+RAP_shrubcov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_shrubcov_file_list)
+RAP_shrubcov_names <- sub("*.tif", "", RAP_shrubcov_names)
+names(RAP_shrubcov_list) <- RAP_shrubcov_names
+```
+
+```{r}
+#add perennial and annual grass and forb biomass rasters by year
+RAP_forbgrass_biomass <- list()
+
+for(i in 1:length(RAP_per_biomass_list)){
+  print(paste0("i: ", i))
+  
+  biomass_stack <- stack(RAP_ann_biomass_list[[i]], RAP_per_biomass_list[[i]])
+  ann_per_biomass <-  calc(biomass_stack, sum)
+  
+  RAP_forbgrass_biomass[[i]] <- ann_per_biomass
+}
+
+names(RAP_forbgrass_biomass) <- c("forb_grass_biomass_2016", 
+                                  "forb_grass_biomass_2017",
+                                  "forb_grass_biomass_2018",
+                                  "forb_grass_biomass_2019",
+                                  "forb_grass_biomass_2020",
+                                  "forb_grass_biomass_2021")
+
+```
+
+
+#extract GIS data to buffer HR
+
+```{r}
+buffHR$elev <- raster::extrjact(elev, st_transform(buffHR,
+                        crs=projection(elev)), weights = FALSE, fun = mean)
+buffHR$trasp <- raster::extract(trasp, st_transform(buffHR,
+                 crs=projection(trasp)), weights = FALSE, fun = mean)
+buffHR$slope <- raster::extract(slope, st_transform(buffHR,
+                        crs=projection(slope)), weights = FALSE, fun = mean)
+buffHR$tpi <- raster::extract(tpi, st_transform(buffHR, crs=projection(tpi)),
+                              weights = FALSE, fun = mean)
+
+##extract rap data by yr
+buffHR$yr <- year(buffHR$lastdate)
+yrs <- buffHR$yr
+unique_yrs <- unique(yrs)
+XYdata <- buffHR
+
+# prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_forbgrass_biomass"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_forbgrass_biomass[[paste0("forb_grass_biomass_",
+                                                  as.character(unique_yrs[[j]]))]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r)), 
+                        weights = FALSE, fun = mean))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+    # add column to original database
+    buffHR$forbgrass_biomass <- vals
+  
+  # prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_treecov_list"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_treecov_list[[paste0(as.character(unique_yrs[[j]]),
+                                            "_Cover_Trees")]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r)), 
+                        weights = FALSE, fun = mean))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+   # add column to original database
+    buffHR$perc_treecov <- vals
+    
+    # prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_shrubcov_list"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_shrubcov_list[[paste0(as.character(unique_yrs[[j]]),
+                                            "_Cover_Shrubs")]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r)), 
+                        weights = FALSE, fun = mean))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+   # add column to original database
+   buffHR$perc_shrubcov <- vals
+  
+  
+```
+
+```{r}
+#save buffHR and topo/habitat data
+saveRDS(buffHR, "./Code output/buffHR_avg topo and habitat data.RDS")
+```
+
+#Summarize and graph data
+
+```{r}
+#create species summary data frame (average by species and season)
+buffHR_hab_spp <- buffHR %>%
+  group_by(species) %>%
+  summarize(mean_slope = mean(slope), sd_slope = sd(slope),
+            mean_elev = mean(elev), sd_elev = sd(elev),
+            mean_trasp = mean(trasp), sd_trasp = sd(trasp),
+            mean_tpi = mean(tpi), sd_tpi = sd(tpi),
+            mean_forbgrass_biomass = mean(forbgrass_biomass), 
+            sd_forbgrass_biomass = sd(forbgrass_biomass),
+            mean_perc_treecov = mean(perc_treecov), 
+            sd_perc_treecov = sd(perc_treecov),
+            mean_perc_shrubcov = mean(perc_shrubcov), 
+            sd_perc_shrubcov = sd(perc_shrubcov), .groups = "keep") 
+
+buffHR_hab_spp$geometry <- NULL
+
+#create seasonal species summary data frame (average by species across seasons)
+buffHR_hab_seas <- buffHR %>%
+  group_by(species, season) %>%
+  summarize(mean_slope = mean(slope), sd_slope = sd(slope),
+            mean_elev = mean(elev), sd_elev = sd(elev),
+            mean_trasp = mean(trasp), sd_trasp = sd(trasp),
+            mean_tpi = mean(tpi), sd_tpi = sd(tpi),
+            mean_forbgrass_biomass = mean(forbgrass_biomass), 
+            sd_forbgrass_biomass = sd(forbgrass_biomass),
+            mean_perc_treecov = mean(perc_treecov), 
+            sd_perc_treecov = sd(perc_treecov),
+            mean_perc_shrubcov = mean(perc_shrubcov), 
+            sd_perc_shrubcov = sd(perc_shrubcov), .groups = "keep") %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+buffHR_hab_seas$geometry <- NULL
+```
+
+```{r}
+#graph mean slope and mean %cover by species
+ggplot(buffHR_hab_spp, aes(x = mean_slope, y = mean_perc_cover, color = species)) +
+  geom_point(size = 5) +
+  xlab("Mean slope (degree)") +
+  ylab("Mean percent tree cover") +
+  ggtitle("Average slope and percent cover in home ranges") 
+```
+
+```{r}
+#scatter plot with encircled points
+library(ggalt)
+
+#graph mean slope and mean %cover by species
+ggplot(buffHR_hab_seas, aes(x=mean_perc_cover, y=mean_slope, color = species)) +
+  geom_point(size = 3) +
+  geom_encircle() +
+  xlab("Mean slope (degree)") +
+  ylab("Mean percent tree cover") +
+  ggtitle("Average slope and percent cover in home ranges") 
+
+#graph mean slope and mean %cover by species faceted by season
+ggplot(buffHR_hab_seas, aes(x=mean_perc_cover, y=mean_slope, color = species)) +
+  geom_point(size = 3) +
+  geom_encircle() +
+  facet_grid(rows = vars(season)) +
+  xlab("Mean slope (degree)") +
+  ylab("Mean percent tree cover") +
+  ggtitle("Average slope and percent cover in home ranges") 
+```
+
+```{r}
+#2d densities plot- doesn't look good
+ggplot(buffHR_hab_seas, aes(x=mean_perc_cover, y=mean_slope, color = species)) +
+  geom_density_2d(bins = 80)
+
+```
+
+```{r}
+#ridgeline plots
+library(ggridges)
+library(ggpubr)
+
+#combine habitat/topographic variables to on column for plotting
+buffHR_ng <- buffHR %>% dplyr::select(-c(firstdate, lastdate, yr))
+buffHR_ng$geometry <- NULL
+buffHR_melt <-  melt(buffHR_ng, id=c("id_yr_seas", "species", "season"))
+
+#all variables 
+ggplot(buffHR_melt, aes(x = value, y = species, fill = species)) +
+  geom_density_ridges() +
+  facet_wrap(~variable, scales = "free") + 
+  theme(legend.position = "none") +
+  xlab("Average variable value in HRs") +
+  ylab("") 
+
+
+#all variables by season
+ggplot(buffHR_melt, aes(x = value, y = species, fill = species)) +
+  geom_density_ridges() +
+  facet_wrap(~variable*season, scales = "free") + 
+  theme(legend.position = "none") +
+  xlab("Average variable value in HRs") +
+  ylab("")
+
+#spring elevation, slope, forbgrass biomass, perc treecov, perc shrub cov
+buffHR_spr <- buffHR_melt %>%
+  filter(season == "spring" & variable %in% c("elev", "slope", "forbgrass_biomass",
+                                              "perc_treecov", "perc_shrubcov")) %>%
+  mutate(variable = if_else(variable == "elev", "Elevation (m)",
+                    if_else(variable == "slope", "Slope (deg.)",
+                    if_else(variable == "forbgrass_biomass", "Forbs and grasses biomass (lbs/acre)",
+                    if_else(variable == "perc_treecov", "Percent tree cover",
+                    if_else(variable == "perc_shrubcov", "Percent shrub cover", "NA")))))) %>%
+  mutate(species = if_else(species == "bighorn", "Bighorn",
+                   if_else(species == "bison", "Bison",
+                   if_else(species == "pronghorn", "Pronghorn",
+                   if_else(species == "elk", "Elk",
+                   if_else(species == "deer", "Mule deer", "NA"))))))
+  
+
+buffHR_spr$variable <- factor(buffHR_spr$variable, levels = c("Elevation (m)",
+                        "Slope (deg.)", "Forbs and grasses biomass (lbs/acre)", 
+                        "Percent tree cover", "Percent shrub cover"))
+
+ggplot(buffHR_spr, aes(x = value, y = species, fill = species)) +
+  geom_density_ridges() +
+  scale_fill_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
+  facet_wrap(~variable, scales = "free", nrow = 5) + 
+  theme(legend.position = "none") +
+  xlab("Average value per individual home ranges") +
+  ylab("") +
+  theme(text = element_text(size = 20))
+
+#slope
+s <- ggplot(buffHR_hab_seas, aes(x = mean_slope, y = species, fill = species)) +
+  geom_density_ridges() +
+  #theme_ridges() + 
+  theme(legend.position = "none") +
+  xlab("Mean slope (degrees)") +
+  ylab("") +
+  ggtitle("Mean slope in home ranges") 
+
+#plots on same page
+ggarrange(pc, s, 
+          ncol = 2)
+```

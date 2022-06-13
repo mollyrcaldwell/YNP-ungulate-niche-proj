@@ -1,0 +1,25 @@
+---
+title: "YNP Ungulate manual move states"
+author: "Molly Caldwell"
+date: "4/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(tidyverse)
+```
+
+```{r}
+#load data with moveparams calculated
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+```
+
+
+

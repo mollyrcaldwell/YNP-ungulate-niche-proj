@@ -1,0 +1,247 @@
+---
+title: "YNP ungulates niche variation"
+author: "Molly Caldwell"
+date: "5/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+library(ggridges)
+library(Ostats)
+library(parallel)
+```
+
+#individual overlap- daily displacement (spring)
+
+```{r}
+#load data
+indiv_day_disp <- read.csv("./Code output/Species move metrics/maxdaydisp_indiv_byseas_copy.csv")[,c(2:7)]
+
+```
+
+```{r}
+#ridgeline density plots- spring
+ggplot(indiv_day_disp %>% filter(season == "spring")) + 
+  geom_density_ridges(aes(x = max_disp_day_km, y = species, group = interaction(species,id_yr_seas),fill = species), scale = 1.5, alpha = 0.4) +
+  theme(legend.position = "none") +
+  xlim(c(0, 20)) +
+  labs(title = "Individual daily displacement (spring)", y = "Species", x = "Daily displacement (km)")
+```
+
+```{r}
+#create list of indiv day disp by season
+seas_disp_list <- split(indiv_day_disp,
+                  f = list(indiv_day_disp$season))
+
+# indiv_disp_list <- list()
+# 
+# # identify cores (use 1 less than you have)
+# no_cores <- detectCores()-1
+# # Setup cluster
+# clust <- makeCluster(no_cores) 
+# # export the objects you need for your calculations from your environment to each node's environment
+# clusterExport(clust, varlist=c("spp_disp_list", "indiv_disp_list"))
+# 
+# for(i in 1:length(spp_disp_list)){
+#   spp_data <- spp_disp_list[[i]] %>% select(c(id_yr_seas, max_disp_day_km))
+#   
+#   indiv_disp_list[[i]] <- split(spp_data, 
+#                                 f = spp_data$id_yr_seas)
+# 
+# }
+# 
+# indiv_disp_num <- list()
+# for(j in 1:length(indiv_disp_list)){
+# indiv_disp_ss <- sapply(indiv_disp_list[[j]], "[", c(2))
+# indiv_disp_num[[j]] <- indiv_disp_ss
+# }
+# 
+# names(indiv_disp_num) <- names(spp_disp_list)
+# 
+# #pairwise individual density overlap by spp and season
+# indiv_day_disp_ol <- list()
+# 
+# for(i in 1:length(indiv_disp_num)){
+#   print(paste0("i: ", i))
+# indiv_day_disp_ol[[i]] <- (indiv_disp_num[[i]])
+# }
+
+samp <- list()
+spp <- unique(seas_disp_list[[2]]$species)
+
+for(i in 1:length(spp)){
+  data_spp <- seas_disp_list[[2]] %>% filter(species == spp[i])
+  ids <- sample(unique(data_spp$id_yr_seas), 10)
+  samp <- rbind(samp, data_spp %>% filter(id_yr_seas %in% ids))}
+
+samp <- samp %>% select(id_yr_seas, max_disp_day_km)
+setDT(samp) 
+samp <- split(samp, by="id_yr_seas", keep=FALSE)
+
+sampt <- map(samp, as.matrix)
+
+ot <- overlapping::overlap(sampt)
+
+saveRDS(ot, file = "./Code output/niche_densities/indiv_day_disp_ol.Rds")
+
+ovl <- ot[["OV"]]
+
+ovl <- as.data.frame(ovl)
+
+```
+
+```{r}
+#assign ids to separate columns and create species variable
+ovl_day_disp <- rownames_to_column(ovl, "row_names")
+
+ovl_day_disp <- ovl_day_disp %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+
+
+```
+
+
+```{r}
+#plot overlap values
+ggplot(data = ovl_day_disp, aes(x = spp_comb, y = ovl, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: daily displacement", x = "Species",
+       y = "Proportion overlap")
+```
+
+#individual overlap- daily temporal activity (movement rate)
+
+```{r}
+#load data
+indiv_day_disp <- read.csv("./Code output/Species move metrics/maxdaydisp_indiv_byseas_copy.csv")[,c(2:7)]
+
+```
+
+```{r}
+#ridgeline density plots- spring
+ggplot(indiv_day_disp %>% filter(season == "spring")) + 
+  geom_density_ridges(aes(x = max_disp_day_km, y = species, group = interaction(species,id_yr_seas),fill = species), scale = 1.5, alpha = 0.4) +
+  theme(legend.position = "none") +
+  xlim(c(0, 20)) +
+  labs(title = "Individual daily displacement (spring)", y = "Species", x = "Daily displacement (km)")
+```
+
+```{r}
+#create list of indiv day disp by season
+seas_disp_list <- split(indiv_day_disp,
+                  f = list(indiv_day_disp$season))
+
+# indiv_disp_list <- list()
+# 
+# # identify cores (use 1 less than you have)
+# no_cores <- detectCores()-1
+# # Setup cluster
+# clust <- makeCluster(no_cores) 
+# # export the objects you need for your calculations from your environment to each node's environment
+# clusterExport(clust, varlist=c("spp_disp_list", "indiv_disp_list"))
+# 
+# for(i in 1:length(spp_disp_list)){
+#   spp_data <- spp_disp_list[[i]] %>% select(c(id_yr_seas, max_disp_day_km))
+#   
+#   indiv_disp_list[[i]] <- split(spp_data, 
+#                                 f = spp_data$id_yr_seas)
+# 
+# }
+# 
+# indiv_disp_num <- list()
+# for(j in 1:length(indiv_disp_list)){
+# indiv_disp_ss <- sapply(indiv_disp_list[[j]], "[", c(2))
+# indiv_disp_num[[j]] <- indiv_disp_ss
+# }
+# 
+# names(indiv_disp_num) <- names(spp_disp_list)
+# 
+# #pairwise individual density overlap by spp and season
+# indiv_day_disp_ol <- list()
+# 
+# for(i in 1:length(indiv_disp_num)){
+#   print(paste0("i: ", i))
+# indiv_day_disp_ol[[i]] <- (indiv_disp_num[[i]])
+# }
+
+samp <- list()
+spp <- unique(seas_disp_list[[2]]$species)
+
+for(i in 1:length(spp)){
+  data_spp <- seas_disp_list[[2]] %>% filter(species == spp[i])
+  ids <- sample(unique(data_spp$id_yr_seas), 10)
+  samp <- rbind(samp, data_spp %>% filter(id_yr_seas %in% ids))}
+
+samp <- samp %>% select(id_yr_seas, max_disp_day_km)
+setDT(samp) 
+samp <- split(samp, by="id_yr_seas", keep=FALSE)
+
+sampt <- map(samp, as.matrix)
+
+ot <- overlapping::overlap(sampt)
+
+saveRDS(ot, file = "./Code output/niche_densities/indiv_day_disp_ol.Rds")
+
+ovl <- ot[["OV"]]
+
+ovl <- as.data.frame(ovl)
+
+```
+
+```{r}
+#assign ids to separate columns and create species variable
+ovl_day_disp <- rownames_to_column(ovl, "row_names")
+
+ovl_day_disp <- ovl_day_disp %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+
+
+```
+
+
+```{r}
+#plot overlap values
+ggplot(data = ovl_day_disp, aes(x = spp_comb, y = ovl, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: daily displacement", x = "Species",
+       y = "Proportion overlap")
+```
+
+
+
+

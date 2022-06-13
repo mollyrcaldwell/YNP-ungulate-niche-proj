@@ -56,6 +56,10 @@ RAP_treecov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GI
                         pattern = glob2rx("*Cover_Trees*"),
                         full.names = TRUE)
 
+RAP_shrubcov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Cover_Shrubs*"),
+                        full.names = TRUE)
+
 RAP_ann_biomass_list <- list()
 for(i in 1:length(RAP_ann_biomass_file_list)){
   print(i)
@@ -85,6 +89,16 @@ RAP_treecov_list[[i]] <- raster(RAP_treecov_file_list[[i]])
 RAP_treecov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_treecov_file_list)
 RAP_treecov_names <- sub("*.tif", "", RAP_treecov_names)
 names(RAP_treecov_list) <- RAP_treecov_names
+
+RAP_shrubcov_list <- list()
+for(i in 1:length(RAP_shrubcov_file_list)){
+  print(i)
+RAP_shrubcov_list[[i]] <- raster(RAP_shrubcov_file_list[[i]])
+}
+
+RAP_shrubcov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_shrubcov_file_list)
+RAP_shrubcov_names <- sub("*.tif", "", RAP_shrubcov_names)
+names(RAP_shrubcov_list) <- RAP_shrubcov_names
 ```
 
 ```{r}
@@ -175,6 +189,32 @@ XYdata <- data_list[[i]]
   
    # add column to original database
     data_list[[i]]$perc_treecov <- vals
+    
+    # prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_shrubcov_list"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_shrubcov_list[[paste0(as.character(unique_yrs[[j]]),
+                                            "_Cover_Shrubs")]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r))))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+   # add column to original database
+    data_list[[i]]$perc_shrubcov <- vals
   
   }
 
@@ -207,20 +247,21 @@ XYdata <- data_list[[i]]
 
 ```
 
+
 ```{r}
 #extract snodas snow depth to winter data using Jerod's extract snodas function
-spp <- c("bighorn", "bison", "elk", "deer", "pronghorn") #loop by spp
-source("Z:/Snodas/code/extract.snodas.R")
-
-for(i in 1:length(spp)){
-  XYdata <- st_as_sf(data_list[[paste0(spp[[i]], ".winter")]], coords = c("x", "y"), crs = crs(data))
-  
-  XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "Z:/Snodas/snowdepth",
-                 datesname = "date")
-  
-  data_list[[paste0(spp[[i]], ".winter")]]$snowdepth <- XYdata$Snodas_SnowDepth
-  
-}
+# spp <- c("bighorn", "bison", "elk", "deer", "pronghorn") #loop by spp
+# source("Z:/Snodas/code/extract.snodas.R")
+# 
+# for(i in 1:length(spp)){
+#   XYdata <- st_as_sf(data_list[[paste0(spp[[i]], ".winter")]], coords = c("x", "y"), crs = crs(data))
+#   
+#   XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "Z:/Snodas/snowdepth",
+#                  datesname = "date")
+#   
+#   data_list[[paste0(spp[[i]], ".winter")]]$snowdepth <- XYdata$Snodas_SnowDepth
+#   
+# }
 ```
 
 

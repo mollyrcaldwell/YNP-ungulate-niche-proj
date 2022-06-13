@@ -1,0 +1,127 @@
+---
+title: "YNP ungulate movement rate daily activity periods"
+author: "Molly Caldwell"
+date: "4/1/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(adehabitatLT)
+library(adehabitatHR)
+library(parallel)
+library(circular)
+library(sf)
+library(lubridate)
+library(moveHMM)
+library(purrr)
+library(dplyr)
+library(ggplot2)
+library(nlme)
+library(mgcv)
+```
+
+#Data Prep
+
+```{r}
+#load seasonal GPS data with 2 hour fixes for all species and calculated move params
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+```
+
+```{r}
+#add speed in data_all from km/hr to m/hr and remove unecessary columns
+data_mr <- data_all %>%
+  mutate(speed_mhr = speed*1000) %>%
+  dplyr::select(c(date, season, cid, id_yr_seas, species,
+           speed, speed_mhr))
+
+```
+
+```{r}
+#split data to different species
+#add hour variable
+data_mr <- data_mr %>% 
+  mutate(date = as.POSIXct(strptime(date, format = "%Y-%m-%d %H:%M:%S"))) %>%
+  mutate(hour = hour(date))
+
+#subset by spp.
+bighorn_mr <- data_mr %>% filter(species == "bighorn")
+bison_mr <- data_mr %>% filter(species == "bison")
+deer_mr <- data_mr %>% filter(species == "deer")
+elk_mr <- data_mr %>% filter(species == "elk")
+pronghorn_mr <- data_mr %>% filter(species == "pronghorn")
+```
+
+#GAM of daily movement rates by species
+
+```{r}
+#GAM with cyclical smoothing term
+bighorn_gam <- gam(speed_mhr ~ s(hour, bs = 'cc', k = 12), data = bighorn_mr,
+                   method = "REML")
+
+bison_gam <- gam(speed_mhr ~ s(hour, bs = 'cc', k = 12), data = bison_mr,
+                   method = "REML")
+
+deer_gam <- gam(speed_mhr ~ s(hour, bs = 'cc', k = 12), data = deer_mr,
+                   method = "REML")
+
+elk_gam <- gam(speed_mhr ~ s(hour, bs = 'cc', k = 12), data = elk_mr,
+                   method = "REML")
+
+pronghorn_gam <- gam(speed_mhr ~ s(hour, bs = 'cc', k = 6), data = pronghorn_mr,
+                   method = "REML")
+```
+
+#Graph
+
+```{r}
+#graph predicted values
+bighorn_pred <- data.frame(time = bighorn_mr$hour,
+                       speed = bighorn_mr$speed_mhr,
+                       predicted_values = predict(bighorn_gam, newdata = bighorn_mr))
+
+bison_pred <- data.frame(time = bison_mr$hour,
+                       speed = bison_mr$speed_mhr,
+                       predicted_values = predict(bison_gam, newdata = bison_mr))
+
+deer_pred <- data.frame(time = deer_mr$hour,
+                       speed = deer_mr$speed_mhr,
+                       predicted_values = predict(deer_gam, newdata = deer_mr))
+
+elk_pred <- data.frame(time = elk_mr$hour,
+                       speed = elk_mr$speed_mhr,
+                       predicted_values = predict(elk_gam, newdata = elk_mr))
+
+pronghorn_pred <- data.frame(time = pronghorn_mr$hour,
+                       speed = pronghorn_mr$speed_mhr,
+                       predicted_values = predict(pronghorn_gam, newdata = pronghorn_mr))
+
+colors <- c("Bighorn" = "#D55E00", "Bison" = "#E69F00", "Mule deer" = "#0072B2",
+            "Elk" = "#009E73", "Pronghorn" = "#CC79A7")
+
+ggplot() +
+ geom_line(data = bighorn_pred, aes(x = time, y = predicted_values, color = "Bighorn"), size = 2) +
+ geom_line(data = bison_pred, aes(x = time, y = predicted_values, color = "Bison"), size = 2) +
+ geom_line(data = deer_pred, aes(x = time, y = predicted_values, color = "Mule deer"), size = 2) +
+ geom_line(data = elk_pred, aes(x = time, y = predicted_values, color = "Elk"), size = 2) +
+ geom_line(data = pronghorn_pred, aes(x = time, y = predicted_values, color = "Pronghorn"), size = 2) +
+  ylim(c(0, 70)) +
+  xlab("Hour") +
+  ylab("Movement rate (m/hr)") +
+  labs(color = "Legend") +
+    scale_color_manual(values = colors) +
+  theme(text = element_text(size = 20))
+
+```
+
+
+
+
+
+
+
