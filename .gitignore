@@ -36,12 +36,18 @@ YNP-ungulate-niche-proj.Rproj
 <<<<<<< HEAD
 .RDataTmp
 HR overlap_by seas_3.22.22.png
-.png
-.RData
-.RDS
-.rds
+*.png
+*.RData
+*.RDS
+*.rds
 RSFs_pop_spp_seas.RData
-.dbf
+*.dbf
 Maps/
 =======
 >>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
+HRoverlap_by season_3.22.2022.png
+HRoverlap_inter vs intra by spp_3.22.22.png
+HRoverlap_inter vs intra_by seas_3.22.22.png
+SSFs_AvailSampled.RData
+RSFs_AvailSampled.RData
+RSFs_VariablesExtracted.RData
