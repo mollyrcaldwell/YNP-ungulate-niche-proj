@@ -33,6 +33,7 @@ Data/
 Code output/
 UDs_trial
 YNP-ungulate-niche-proj.Rproj
+<<<<<<< HEAD
 .RDataTmp
 HR overlap_by seas_3.22.22.png
 .png
@@ -42,3 +43,5 @@ HR overlap_by seas_3.22.22.png
 RSFs_pop_spp_seas.RData
 .dbf
 Maps/
+=======
+>>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
