@@ -32,7 +32,7 @@ Mean and SD
 ```{r}
 hab_day <- data %>%
   group_by(id_yr_seas, date_only) %>%
-  summarize(elev_avg = mean(elev), elev_sd = sd(elev),
+  summarize(csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
             trasp_avg = mean(trasp), trasp_sd = sd(trasp),
             slope_avg = mean(slope), slope_sd = sd(slope),
             tpi_avg = mean(tpi), tpi_sd = sd(tpi),
@@ -44,7 +44,136 @@ hab_day <- data %>%
             perc_shrubcov_sd = sd(perc_shrubcov),
             snowdepth_avg = mean(snowdepth), snowdepth_sd = sd(snowdepth),
             swe_avg = mean(swe), swe_sd = sd(swe),
-            elev_avg = mean(elev), elev_sd = sd(elev),)
+            NDVIVals_avg = mean(NDVIVals), NDVIVals_sd = sd(NDVIVals),
+            IRGVals_avg = mean(IRGVals), IRGVals_sd = sd(IRGVals),
+            maxNDVIdate_avg = mean(maxNDVIdate), maxNDVIdate_sd = sd(maxNDVIdate),
+            maxIRGdate_avg = mean(maxIRGdate), maxIRGdate_sd = sd(maxIRGdate),
+            csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            .groups = "keep")
+
+saveRDS(hab_day, "./Code output/individual_habitat_metrics/indiv_daily_habitat_summ.rds")
+```
+
+#Summary habitat variables by week (every 5 days)
+
+```{r}
+#create 5-day grouping variable per id_yr_seas
+data <- data %>% group_by(id_yr_seas) %>%
+  mutate(week = cut(as.Date(date), breaks = "5 days", include.lowest = T))
+  
+```
+
+```{r}
+hab_week <- data %>%
+  group_by(id_yr_seas, week) %>%
+  summarize(csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            trasp_avg = mean(trasp), trasp_sd = sd(trasp),
+            slope_avg = mean(slope), slope_sd = sd(slope),
+            tpi_avg = mean(tpi), tpi_sd = sd(tpi),
+            forbgrass_biomass_avg = mean(forbgrass_biomass), 
+            forbgrass_biomass_sd = sd(forbgrass_biomass),
+            perc_treecov_avg = mean(perc_treecov), 
+            perc_treecov_sd = sd(perc_treecov),
+            perc_shrubcov_avg = mean(perc_shrubcov), 
+            perc_shrubcov_sd = sd(perc_shrubcov),
+            snowdepth_avg = mean(snowdepth), snowdepth_sd = sd(snowdepth),
+            swe_avg = mean(swe), swe_sd = sd(swe),
+            NDVIVals_avg = mean(NDVIVals), NDVIVals_sd = sd(NDVIVals),
+            IRGVals_avg = mean(IRGVals), IRGVals_sd = sd(IRGVals),
+            maxNDVIdate_avg = mean(maxNDVIdate), maxNDVIdate_sd = sd(maxNDVIdate),
+            maxIRGdate_avg = mean(maxIRGdate), maxIRGdate_sd = sd(maxIRGdate),
+            csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            .groups = "keep")
+
+saveRDS(hab_week, "./Code output/individual_habitat_metrics/indiv_weekly_habitat_summ.rds")
+```
+
+#Summary habitat variables by month
+
+```{r}
+#create month grouping variable per id_yr_seas
+data <- data %>% group_by(id_yr_seas) %>%
+  mutate(month = cut(as.Date(date), breaks = "1 month", include.lowest = T))
+  
+```
+
+```{r}
+hab_month <- data %>%
+  group_by(id_yr_seas, month) %>%
+  summarize(csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            trasp_avg = mean(trasp), trasp_sd = sd(trasp),
+            slope_avg = mean(slope), slope_sd = sd(slope),
+            tpi_avg = mean(tpi), tpi_sd = sd(tpi),
+            forbgrass_biomass_avg = mean(forbgrass_biomass), 
+            forbgrass_biomass_sd = sd(forbgrass_biomass),
+            perc_treecov_avg = mean(perc_treecov), 
+            perc_treecov_sd = sd(perc_treecov),
+            perc_shrubcov_avg = mean(perc_shrubcov), 
+            perc_shrubcov_sd = sd(perc_shrubcov),
+            snowdepth_avg = mean(snowdepth), snowdepth_sd = sd(snowdepth),
+            swe_avg = mean(swe), swe_sd = sd(swe),
+            NDVIVals_avg = mean(NDVIVals), NDVIVals_sd = sd(NDVIVals),
+            IRGVals_avg = mean(IRGVals), IRGVals_sd = sd(IRGVals),
+            maxNDVIdate_avg = mean(maxNDVIdate), maxNDVIdate_sd = sd(maxNDVIdate),
+            maxIRGdate_avg = mean(maxIRGdate), maxIRGdate_sd = sd(maxIRGdate),
+            csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            .groups = "keep")
+
+saveRDS(hab_month, "./Code output/individual_habitat_metrics/indiv_monthly_habitat_summ.rds")
+```
+
+#Summary habitat variables by season
+
+```{r}
+hab_season <- data %>%
+  group_by(id_yr_seas, season, yr) %>%
+  summarize(csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            trasp_avg = mean(trasp), trasp_sd = sd(trasp),
+            slope_avg = mean(slope), slope_sd = sd(slope),
+            tpi_avg = mean(tpi), tpi_sd = sd(tpi),
+            forbgrass_biomass_avg = mean(forbgrass_biomass), 
+            forbgrass_biomass_sd = sd(forbgrass_biomass),
+            perc_treecov_avg = mean(perc_treecov), 
+            perc_treecov_sd = sd(perc_treecov),
+            perc_shrubcov_avg = mean(perc_shrubcov), 
+            perc_shrubcov_sd = sd(perc_shrubcov),
+            snowdepth_avg = mean(snowdepth), snowdepth_sd = sd(snowdepth),
+            swe_avg = mean(swe), swe_sd = sd(swe),
+            NDVIVals_avg = mean(NDVIVals), NDVIVals_sd = sd(NDVIVals),
+            IRGVals_avg = mean(IRGVals), IRGVals_sd = sd(IRGVals),
+            maxNDVIdate_avg = mean(maxNDVIdate), maxNDVIdate_sd = sd(maxNDVIdate),
+            maxIRGdate_avg = mean(maxIRGdate), maxIRGdate_sd = sd(maxIRGdate),
+            csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            .groups = "keep")
+
+saveRDS(hab_season, "./Code output/individual_habitat_metrics/indiv_seasonly_habitat_summ.rds")
+```
+
+#Summary habitat variables by year
+
+```{r}
+hab_year <- data %>%
+  group_by(cid, yr) %>%
+  summarize(csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            trasp_avg = mean(trasp), trasp_sd = sd(trasp),
+            slope_avg = mean(slope), slope_sd = sd(slope),
+            tpi_avg = mean(tpi), tpi_sd = sd(tpi),
+            forbgrass_biomass_avg = mean(forbgrass_biomass), 
+            forbgrass_biomass_sd = sd(forbgrass_biomass),
+            perc_treecov_avg = mean(perc_treecov), 
+            perc_treecov_sd = sd(perc_treecov),
+            perc_shrubcov_avg = mean(perc_shrubcov), 
+            perc_shrubcov_sd = sd(perc_shrubcov),
+            snowdepth_avg = mean(snowdepth), snowdepth_sd = sd(snowdepth),
+            swe_avg = mean(swe), swe_sd = sd(swe),
+            NDVIVals_avg = mean(NDVIVals), NDVIVals_sd = sd(NDVIVals),
+            IRGVals_avg = mean(IRGVals), IRGVals_sd = sd(IRGVals),
+            maxNDVIdate_avg = mean(maxNDVIdate), maxNDVIdate_sd = sd(maxNDVIdate),
+            maxIRGdate_avg = mean(maxIRGdate), maxIRGdate_sd = sd(maxIRGdate),
+            csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
+            .groups = "keep")
+
+saveRDS(hab_year, "./Code output/individual_habitat_metrics/indiv_yearly_habitat_summ.rds")
 ```
 
 
