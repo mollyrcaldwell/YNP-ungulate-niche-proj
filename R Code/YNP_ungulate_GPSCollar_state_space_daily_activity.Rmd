@@ -25,7 +25,7 @@ library(overlap)
 
 ```{r}
 #load species' greenup data list with triple state space model states added 
-data_list <- readRDS("./Code output/allspp_greenup_GPSdata_triplestates.rds")
+data_list <- readRDS("./Code output/allspp_seasonal_GPSdata_triplestates.rds")
 
 #create hour of GPS data column and time column
 for(i in 1:length(data_list)){
@@ -76,7 +76,7 @@ ms_rad_data <- rad.ms.df(data_list[[i]])
 rad_ms_list[[i]] <- ms_rad_data
 }
 
-names(rad_ms_list) <- c("bighorn", "bison", "elk", "deer", "pronghorn")
+names(rad_ms_list) <- names(data_list)
 ```
 
 
@@ -148,12 +148,25 @@ legend("topleft", c("bighorn", "bison", "elk", "deer", "pronghorn", "1", "2", "3
 ```{r}
 library(mgcv)
 
-#bighorn
-data <- data_list[[1]]
+#loop gam models by species and season
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data_list"))
+
+gam_list <- list(list())
+predict_list <- list(list())
+
+for(i in 1:length(data_list)){
+  print(i)
+data <- data_list[[i]]
 
 ms_data <- data %>%
-  count(state, hr) %>%
-  group_by(state) %>%
+  count(state, hr, id_yr_seas) %>%
+  group_by(state, id_yr_seas) %>%
   mutate(prop_count = n/sum(n))
 
 ms1_data <- ms_data %>% filter(state == 1)
@@ -168,7 +181,7 @@ gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
 gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
                    method = "REML")
 
-bh_gam_list <- list(gam1, gam2, gam3)
+gam_list[[i]] <- list(gam1, gam2, gam3)
 
 
 #predicted values
@@ -187,171 +200,13 @@ pred3 <- data.frame(time = ms3_data$hr,
                        state = ms3_data$state,
                        predicted_values = predict(gam3, newdata = ms3_data))
 
-bh_pred_list <- list(pred1, pred2, pred3)
+predict_list[[i]] <- list(pred1, pred2, pred3)
 
-#bison
-data <- data_list[[2]]
+}
+stopCluster(clust)   # you must stop the parallelization framework
 
-ms_data <- data %>%
-  count(state, hr) %>%
-  group_by(state) %>%
-  mutate(prop_count = n/sum(n))
-
-ms1_data <- ms_data %>% filter(state == 1)
-ms2_data <- ms_data %>% filter(state == 2)
-ms3_data <- ms_data %>% filter(state == 3)
-
-#GAM with cyclical smoothing term
-gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
-                   method = "REML")
-gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
-                   method = "REML")
-gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
-                   method = "REML")
-
-bi_gam_list <- list(gam1, gam2, gam3)
-
-
-#predicted values
-pred1 <- data.frame(time = ms1_data$hr,
-                       prop_count = ms1_data$prop_count,
-                       state = ms1_data$state,
-                       predicted_values = predict(gam1, newdata = ms1_data))
-
-pred2 <- data.frame(time = ms2_data$hr,
-                       prop_count = ms2_data$prop_count,
-                       state = ms2_data$state,
-                       predicted_values = predict(gam2, newdata = ms2_data))
-
-pred3 <- data.frame(time = ms3_data$hr,
-                       prop_count = ms3_data$prop_count,
-                       state = ms3_data$state,
-                       predicted_values = predict(gam3, newdata = ms3_data))
-
-bi_pred_list <- list(pred1, pred2, pred3)
-
-#elk
-data <- data_list[[3]]
-
-ms_data <- data %>%
-  count(state, hr) %>%
-  group_by(state) %>%
-  mutate(prop_count = n/sum(n))
-
-ms1_data <- ms_data %>% filter(state == 1)
-ms2_data <- ms_data %>% filter(state == 2)
-ms3_data <- ms_data %>% filter(state == 3)
-
-#GAM with cyclical smoothing term
-gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
-                   method = "REML")
-gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
-                   method = "REML")
-gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
-                   method = "REML")
-
-el_gam_list <- list(gam1, gam2, gam3)
-
-
-#predicted values
-pred1 <- data.frame(time = ms1_data$hr,
-                       prop_count = ms1_data$prop_count,
-                       state = ms1_data$state,
-                       predicted_values = predict(gam1, newdata = ms1_data))
-
-pred2 <- data.frame(time = ms2_data$hr,
-                       prop_count = ms2_data$prop_count,
-                       state = ms2_data$state,
-                       predicted_values = predict(gam2, newdata = ms2_data))
-
-pred3 <- data.frame(time = ms3_data$hr,
-                       prop_count = ms3_data$prop_count,
-                       state = ms3_data$state,
-                       predicted_values = predict(gam3, newdata = ms3_data))
-
-el_pred_list <- list(pred1, pred2, pred3)
-
-#deer
-data <- data_list[[4]]
-
-ms_data <- data %>%
-  count(state, hr) %>%
-  group_by(state) %>%
-  mutate(prop_count = n/sum(n))
-
-ms1_data <- ms_data %>% filter(state == 1)
-ms2_data <- ms_data %>% filter(state == 2)
-ms3_data <- ms_data %>% filter(state == 3)
-
-#GAM with cyclical smoothing term
-gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
-                   method = "REML")
-gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
-                   method = "REML")
-gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
-                   method = "REML")
-
-md_gam_list <- list(gam1, gam2, gam3)
-
-
-#predicted values
-pred1 <- data.frame(time = ms1_data$hr,
-                       prop_count = ms1_data$prop_count,
-                       state = ms1_data$state,
-                       predicted_values = predict(gam1, newdata = ms1_data))
-
-pred2 <- data.frame(time = ms2_data$hr,
-                       prop_count = ms2_data$prop_count,
-                       state = ms2_data$state,
-                       predicted_values = predict(gam2, newdata = ms2_data))
-
-pred3 <- data.frame(time = ms3_data$hr,
-                       prop_count = ms3_data$prop_count,
-                       state = ms3_data$state,
-                       predicted_values = predict(gam3, newdata = ms3_data))
-
-md_pred_list <- list(pred1, pred2, pred3)
-
-#pronghorn
-data <- data_list[[5]]
-
-ms_data <- data %>%
-  count(state, hr) %>%
-  group_by(state) %>%
-  mutate(prop_count = n/sum(n))
-
-ms1_data <- ms_data %>% filter(state == 1)
-ms2_data <- ms_data %>% filter(state == 2)
-ms3_data <- ms_data %>% filter(state == 3)
-
-#GAM with cyclical smoothing term
-gam1 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms1_data,
-                   method = "REML")
-gam2 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms2_data,
-                   method = "REML")
-gam3 <- gam(prop_count ~ s(hr, bs = 'cc', k = 12), data = ms3_data,
-                   method = "REML")
-
-ph_gam_list <- list(gam1, gam2, gam3)
-
-
-#predicted values
-pred1 <- data.frame(time = ms1_data$hr,
-                       prop_count = ms1_data$prop_count,
-                       state = ms1_data$state,
-                       predicted_values = predict(gam1, newdata = ms1_data))
-
-pred2 <- data.frame(time = ms2_data$hr,
-                       prop_count = ms2_data$prop_count,
-                       state = ms2_data$state,
-                       predicted_values = predict(gam2, newdata = ms2_data))
-
-pred3 <- data.frame(time = ms3_data$hr,
-                       prop_count = ms3_data$prop_count,
-                       state = ms3_data$state,
-                       predicted_values = predict(gam3, newdata = ms3_data))
-
-ph_pred_list <- list(pred1, pred2, pred3)
+names(gam_list) <- names(data_list)
+names(predict_list) <- names(data_list)
 
 
 colors <- c("bighorn" = "red", "bison" = "orange", "deer" = "chartreuse3", "elk" = "cornflowerblue",
@@ -385,43 +240,51 @@ ggplot() +
 
 
 #species together, movement state separate graphs
-  ggplot() +
- geom_line(data = bh_pred_list[[1]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
-  geom_line(data = bi_pred_list[[1]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
-  geom_line(data = el_pred_list[[1]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
-  geom_line(data = md_pred_list[[1]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
-  geom_line(data = ph_pred_list[[1]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+seas_grp <- list(c(1:5), c(6:10), c(11:15), c(16:20))
+seas <- c("fall", "spring", "summer", "winter")
+
+for(i in 1:length(seas_grp)){
+  pred_seas <- predict_list[seas_grp[[i]]]
+  
+ print(ggplot() +
+ geom_line(data = pred_seas[[1]][[1]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
+  geom_line(data = pred_seas[[2]][[1]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
+  geom_line(data = pred_seas[[3]][[1]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
+  geom_line(data = pred_seas[[4]][[1]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
+  geom_line(data = pred_seas[[5]][[1]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
   scale_color_manual(values = colors) +
   xlab("Hour") +
   ylab("Proportion GPS point count") +
-  ggtitle("Movement State 1") +
-  labs(color = "Species")
+  ggtitle(paste0("Movement State 1- ", seas[i])) +
+  labs(color = "Species"))
   
-   ggplot() +
- geom_line(data = bh_pred_list[[2]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
-  geom_line(data = bi_pred_list[[2]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
-  geom_line(data = el_pred_list[[2]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
-  geom_line(data = md_pred_list[[2]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
-  geom_line(data = ph_pred_list[[2]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+   print(ggplot() +
+ geom_line(data = pred_seas[[1]][[2]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
+  geom_line(data = pred_seas[[2]][[2]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
+  geom_line(data = pred_seas[[3]][[2]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
+  geom_line(data = pred_seas[[4]][[2]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
+  geom_line(data = pred_seas[[5]][[2]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
      ylim(0, 0.2) +
   scale_color_manual(values = colors) +
   xlab("Hour") +
   ylab("Proportion GPS point count") +
-  ggtitle("Movement State 2") +
-  labs(color = "Species")
+  ggtitle(paste0("Movement State 2- ", seas[i])) +
+  labs(color = "Species"))
+  
    
-    ggplot() +
- geom_line(data = bh_pred_list[[3]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
-  geom_line(data = bi_pred_list[[3]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
-  geom_line(data = el_pred_list[[3]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
-  geom_line(data = md_pred_list[[3]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
-  geom_line(data = ph_pred_list[[3]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+   print(ggplot() +
+ geom_line(data = pred_seas[[1]][[3]], aes(x = time, y = predicted_values, color = "bighorn"), size = 1.1) +
+  geom_line(data = pred_seas[[2]][[3]], aes(x = time, y = predicted_values, color = "bison"), size = 1.1) +
+  geom_line(data = pred_seas[[3]][[3]], aes(x = time, y = predicted_values, color = "deer"), size = 1.1) +
+  geom_line(data = pred_seas[[4]][[3]], aes(x = time, y = predicted_values, color = "elk"), size = 1.1) +
+  geom_line(data = pred_seas[[5]][[3]], aes(x = time, y = predicted_values, color = "pronghorn"), size = 1.1) +
+     ylim(0, 0.2) +
   scale_color_manual(values = colors) +
-      ylim(0, 0.2) +
   xlab("Hour") +
   ylab("Proportion GPS point count") +
-  ggtitle("Movement State 3") +
-  labs(color = "Species")
+  ggtitle(paste0("Movement State 3- ", seas[i])) +
+  labs(color = "Species"))
+   }
 
 ```
 

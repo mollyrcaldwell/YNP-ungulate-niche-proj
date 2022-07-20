@@ -1,7 +1,7 @@
 ---
 title: "YNP ungulates RSFs Part C Fit Models"
 author: "Molly Caldwell"
-date: "2/16/2022"
+date: "3/16/2022"
 output: html_document
 ---
 
@@ -33,45 +33,42 @@ library(glmmTMB)
 load("RSFs_VariablesExtracted.RData")
 ```
 
-#Population scale analyses
+#Population scale analyses by species and season
 
 ```{r}
-#-----------------------------------------#
-# analyze population range scale data ####
-#-----------------------------------------#
+# get the scale of the variables similar and check for variable correlation
 
-# get the scale of the variables similar (grab same code from lab 3)
-data_pop$Dist2roads <- data_pop$Dist2roads/1000 #Dist2roads to km
-data_pop$Dist2Escape <- data_pop$Dist2Escape/1000 # Dist2Escape to km
-data_pop$elev <- data_pop$elev/1000 # elev to KM
+for(i in 1:length(data_list)){
+data_list[[i]]$elev <- data_list[[i]]$elev/1000 # elev to KM
 
-#start by checking correlation
-variables <- c("elev","trasp","slope","tpi","Dist2Escape","Dist2roads","treecov",
-               "iNDVI19","AnnualForbGrass","BareGround","PerennialForbGrass")
-correl <- data_pop %>% 
+data_list[[i]]$rank_forbgrass_biomass <- 
+  data_list[[i]]$forbgrass_biomass/max(data_list[[i]]$forbgrass_biomass) #rank biomass
+
+data_list[[i]]$rank_treecov <- data_list[[i]]$perc_treecov/100 #rank tree cover
+data_list[[i]]$rank_shrubcov <- data_list[[i]]$perc_shrubcov/100 #rank shrub cover
+
+#create squared variables
+data_list[[i]]$elev2 <- (data_list[[i]]$elev)^2
+data_list[[i]]$slope2 <- (data_list[[i]]$slope)^2
+data_list[[i]]$trasp2 <- (data_list[[i]]$trasp)^2
+data_list[[i]]$tpi2 <- (data_list[[i]]$tpi)^2
+data_list[[i]]$rank_forbgrass_biomass2 <- (data_list[[i]]$rank_forbgrass_biomass)^2
+data_list[[i]]$rank_treecov2 <- (data_list[[i]]$rank_treecov)^2
+data_list[[i]]$rank_shrubcov2 <- (data_list[[i]]$rank_shrubcov)^2
+
+#check correlation
+print(paste(data_list[[i]]$species[1], data_list[[i]]$season[1], sep = "-"))
+
+variables <- c("elev","trasp","slope","tpi", "rank_forbgrass_biomass", "rank_treecov", "rank_shrubcov")
+
+correl <- data_list[[i]] %>% 
   dplyr::select(all_of(variables)) %>% 
   cor(use="pairwise.complete.obs", method="pearson") %>% 
   round(3)
 
-correl
-ifelse(abs(correl)>.4, correl, NA)  # a cleaner way to look at it
+print(ifelse(abs(correl)>.4, correl, NA))  # a cleaner way to look at it
+}
 
-# note that Dist2Escape and slope should not be in the same model
-# also, treecov and PerennialForbGrass should also not be in same model
-
-# create dummy variables for landcover variable (don't forget, need to drop one in analysis)
-table(is.na(data_pop$landcov))  #this ideally should be ALL FALSE. If not, then you should remove the lines with NAs
-data_pop$landcover <- data_pop$landcov
-dum <- data_pop %>% 
-  dplyr::select(landcov) %>% 
-  dummy.data.frame(names="landcov") #create dummy variables
-
-head(dum)
-length(unique(data_pop$landcov)) == ncol(dum)   # this should be TRUE
-# now cbind up the new columns
-data_pop <- cbind(data_pop, dum)
-head(data_pop)
-rm(dum)
 ```
 
 ```{r}
@@ -112,64 +109,332 @@ nrow(data_pop)   # Hopefully you aren't deleting too many.
 # population range scale model development ####
 #---------------------------------------------#
 
-# build a full model here with all of your variables...
-full_pop <- glmer(used ~ elev + trasp + slope + tpi + Dist2roads + treecov + 
-                    iNDVI19 + AnnualForbGrass + BareGround + PerennialForbGrass + 
-                    landcovforest + (1|id_yr_seas), #think about your random effects!
-                  family = binomial(link = "logit"), data = data_pop, na.action="na.fail")
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data_list"))
 
+#loop by seasons other than winter
+pop_rsf_list <- list()
 
-summary(full_pop)
-confint(full_pop, method="Wald")
+for(i in 1:length(data_list)){
+  print(i)
+model <- glmer(used ~ elev + elev2 + trasp + trasp2 + slope + slope2 + 
+                   tpi + tpi2 + rank_forbgrass_biomass + rank_forbgrass_biomass2 +
+                   rank_treecov + rank_treecov2 + rank_shrubcov + rank_shrubcov2 +
+                 (1|id_yr_seas),
+                  family = binomial(link = "logit"), data = data_list[[i]], na.action="na.fail")
 
-# There is another method for fitting RSFs in Muff et al. 2020 (Methods in Ecology and Evolution). They glmmTMB package to fit. 
-full_pop_RandSlopes <- glmmTMB(used ~ elev + trasp + slope + tpi + Dist2roads + treecov + 
-                                 iNDVI19 + AnnualForbGrass + BareGround + PerennialForbGrass + 
-                                 landcovforest + (1|id_yr_seas) + (0+elev|id_yr_seas) + (0+trasp|id_yr_seas)
-                               + (0+slope|id_yr_seas)+ (0+tpi|id_yr_seas)+ (0+Dist2roads|id_yr_seas)
-                               + (0+treecov|id_yr_seas)+ (0+iNDVI19|id_yr_seas)+ (0+AnnualForbGrass|id_yr_seas)
-                               + (0+BareGround|id_yr_seas)+ (0+PerennialForbGrass|id_yr_seas)+ (0+landcovforest|id_yr_seas), #think about your random effects!
-                               family = binomial(), data = data_pop, na.action="na.fail")
-summary(full_pop_RandSlopes)
-confint(full_pop_RandSlopes)
-coefficients(full_pop_RandSlopes)  # have a look at the coefficients for each id_yr_seas
+pop_rsf_list[[i]] <- model
+}
+stopCluster(clust)   # you must stop the parallelization framework
+
+names(pop_rsf_list) <- names(data_list)
+
+summary(pop_rsf_list[[4]])
+confint(pop_rsf_list[[1]])
+coefficients(pop_rsf_list[[1]])  # have a look at the coefficients for each id_yr_seas
 
 # now you need to do all this coding in the analysis section for the other two RSF scales
 
-hist(coefficients(full_pop_RandSlopes)[[1]][[1]]$elev)
+hist(coefficients(pop_rsf_list[[1]])[[1]][[1]]$elev)
 abline(v=-2.850350)  # this is the main effect (i.e., population level effect) copied from the conditional model's Estimate
 
 ```
 
-#Analyze Home Range Scale Data
+```{r}
+#random effects tmb model
+# model <- glmmTMB(used ~ elev + elev2 + trasp + trasp2 + slope + slope2 + 
+#                    tpi + tpi2 + rank_forbgrass_biomass + I(rank_forbgrass_biomass^2) +
+#                    rank_treecov + I(rank_treecov^2) + rank_shrubcov + I(rank_shrubcov^2) + 
+#                    (1|id_yr_seas) + (0+elev+I(elev^2)|id_yr_seas) + 
+#                    (0+trasp+I(trasp^2)|id_yr_seas) + 
+#                    (0+slope+I(slope^2)|id_yr_seas) + (0+tpi+I(tpi^2)|id_yr_seas) + 
+#                    (0+rank_forbgrass_biomass+I(rank_forbgrass_biomass^2)|id_yr_seas) + 
+#                    (0+rank_treecov+I(rank_treecov^2)|id_yr_seas) + 
+#                    (0+rank_shrubcov+I(rank_shrubcov^2)|id_yr_seas),
+#                                family = binomial(), data = data_list[[i]], na.action="na.fail")
+```
 
-#Analyze Local (buffer) Scale Data
-
-#Analyze Community (all spp populations) Data
-#do nested variable|species/idyrseason by each variable for random effects
-
-#Population scale analyses
 
 ```{r}
-#-----------------------------------------#
-# analyze community range scale data ####
-#-----------------------------------------#
+save.image("RSFs_pop_spp_seas.RData")
+```
 
-# get the scale of the variables similar (grab same code from lab 3)
-data_comm$elev <- data_comm$elev/1000 # elev to KM
-data_comm$perc_forbgrass_biomass <- (data_comm$forbgrass_biomass/max(data_comm$forbgrass_biomass))*100
+#Results tables
 
-#start by checking correlation
-variables <- c("elev","trasp","slope", "perc_treecov", "perc_forbgrass_biomass")
-correl <- data_comm %>% 
-  dplyr::select(all_of(variables)) %>% 
-  cor(use="pairwise.complete.obs", method="pearson") %>% 
-  round(3)
+```{r}
+library(jtools)
 
-correl
-ifelse(abs(correl)>.4, correl, NA)  # a cleaner way to look at it
+result_df <- data.frame(Species = "NA", Season = "NA", 
+                Variable = "NA", Estimate = "NA", CI_low = "NA", CI_high = "NA",
+                Pvalue = "NA")
+
+
+for(i in 1:length(pop_rsf_list)){
+  Species = str_replace(names(pop_rsf_list)[i], "\\..*", "")
+  Season = str_replace(names(pop_rsf_list)[i], ".*\\.", "")
+  Variable = rownames(summ(pop_rsf_list[[i]])[["coeftable"]])
+  Estimate = round(summ(pop_rsf_list[[i]])[["coeftable"]][,1], 
+                   digits = 2)
+  Pvalue = round(summ(pop_rsf_list[[i]])[["coeftable"]][,4], 
+                   digits = 4)
+  CI_low = round(summ(pop_rsf_list[[i]], confint = T)[["coeftable"]][,2], 
+                   digits = 2)
+  CI_high = round(summ(pop_rsf_list[[i]], confint = T)[["coeftable"]][,3], 
+                   digits = 2)
+  
+df <- cbind(Species, Season, Variable, Estimate, CI_low, CI_high, Pvalue)
+
+result_df <- rbind(df, result_df)
+}
+
+result_df <- result_df %>% filter(Species != "NA") %>%
+  arrange(Species, Season)
+
+rownames(result_df) <- NULL
+
+#save as text file
+write.table(result_df, file = "./Code output/summary table_popRSFs_all spp by seas.txt",
+            sep = ",", quote = FALSE, row.names = FALSE)
+```
+
+#Plots
+
+```{r}
+#predictive line plots
+##add predicted probability values per variable value in data list
+for(i in 1:length(data_list)){
+  print(i)
+data_list[[i]]$predict_prob <- predict(pop_rsf_list[[i]], type = "response")
+}
+
+##compile data list to one data frame
+data_pred <- plyr::ldply(data_list)
+
+#plot
+ggplot(data_pred, aes(x = as.numeric(elev), y = predict_prob, color = Species)) +
+  geom_point() +
+  facet_wrap(~season, scales = "free", ncol = 4) +
+  theme(legend.position = "none") +
+  xlab("Elevation") +
+  ylab("Predicted probability of use") +
+  ggtitle("Population RSF predictions") 
 
 ```
+
+
+```{r}
+#coef plot
+graph_tbl <- result_df %>% filter(Variable != "(Intercept)") %>%
+  mutate(Variable = factor(Variable, levels = c("rank_forbgrass_biomass", 
+                          "rank_forbgrass_biomass2", "rank_treecov", "rank_treecov2",
+                          "rank_shrubcov", "rank_shrubcov2",
+                          "trasp", "trasp2", "tpi", "tpi2", "slope", "slope2",
+                          "elev", "elev2")))
+
+#plot coefficient estimates by spp and season
+ggplot(graph_tbl, aes(x = Variable, y = as.numeric(Estimate), color = Season)) +
+  geom_hline(yintercept = 0, colour = gray(1/2), lty = 2) +
+  geom_point(aes(x = Variable, 
+                 y = as.numeric(Estimate)), 
+             position = position_dodge(0.5)) + 
+  geom_linerange(aes(x = Variable, 
+                     ymin = as.numeric(CI_low),
+                     ymax = as.numeric(CI_high)),
+                 lwd = 1, position = position_dodge(0.5)) +
+    facet_wrap(~Species) +
+  ylab("Coefficient estimate") +
+  coord_flip()
+```
+
+```{r}
+#ridgeline plot
+  ##make table of coefficients per id yr seas
+  id_coef <- data.frame(Species = "NA", Season = "NA", Variable = "NA",
+                        Estimate = "NA")
+
+for(i in 1:length(pop_rsf_list)){
+  Species = str_replace(names(pop_rsf_list)[i], "\\..*", "")
+  Season = str_replace(names(pop_rsf_list)[i], ".*\\.", "")
+  Variable = as.character(stack(coefficients(pop_rsf_list[[i]])[["cond"]][["id_yr_seas"]])$ind)
+  Estimate = stack(coefficients(pop_rsf_list[[i]])[["cond"]][["id_yr_seas"]])[,1]
+  
+  df <- cbind(Species, Season, Variable, Estimate)
+  
+  id_coef <- rbind(df, id_coef)
+}
+
+id_coef <- id_coef %>% filter(Species != "NA") %>%
+  filter(Variable != "(Intercept)") %>%
+  mutate(Variable = factor(Variable, levels = c("elev", "slope", "tpi", "trasp",
+                            "rank_treecov", "rank_forbgrass_biomass",
+                            "rank_snowdepth"))) %>%
+  arrange(Variable)
+                      
+
+#plot
+library(ggridges)
+library(ggpubr)
+
+ggplot(id_coef, aes(x = as.numeric(Estimate), y = Species, fill = Species)) +
+  geom_density_ridges() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~Variable+Season, scales = "free", ncol = 4) +
+  theme(legend.position = "none") +
+  xlab("Coefficient Estimates") +
+  ylab("") +
+  ggtitle("Population RSF estimates by ID years") 
+```
+
+#Predictive maps
+
+```{r}
+#prep variable rasters and stack
+max_v <- RAP_ann_biomass_list[["2021_Biomass_AnnualForbsGrasses"]]@data@max
+rank_forbgrass_biomass <- calc(RAP_forbgrass_biomass[[6]], fun = function(v) v/max_v)
+rank_forbgrass_biomass <- crop(rank_forbgrass_biomass, elev)
+rank_treecov <- calc(RAP_treecov_list[[6]], fun = function(v) v/100)
+rank_treecov <- crop(rank_treecov, elev)
+elev <- calc(elev, fun = function(v) v/1000)
+
+elev <- crop(elev, rank_forbgrass_biomass)
+slope <- crop(slope, rank_forbgrass_biomass)
+tpi <- crop(tpi, rank_forbgrass_biomass)
+trasp <- crop(trasp, rank_forbgrass_biomass)
+rank_treecov <- crop(rank_treecov, rank_forbgrass_biomass)
+
+rank_treecov <- resample(rank_treecov, elev, method = "bilinear")
+rank_forbgrass_biomass <- resample(rank_forbgrass_biomass, elev, method = "bilinear")
+
+
+var_stk <- raster::stack(elev, slope, tpi, trasp, rank_treecov, 
+                       rank_forbgrass_biomass)
+
+names(var_stk) <- c("elev", "slope", "tpi", "trasp", "rank_treecov", "rank_forbgrass_biomass")
+
+```
+
+```{r}
+#loop rsf and predict by spp and season
+pred_rsf_stk <- raster()
+
+for(i in 1:length(data_list)){
+  print(i)
+#create population level model with no id yr seas random effect
+rsf_nr <- glm(used ~ elev + trasp + slope + tpi + rank_forbgrass_biomass +
+              rank_treecov, family = binomial(link = "logit"), 
+              data = data_list[[i]])
+
+
+#predict over variable stk
+rsf_pred <- raster::predict(var_stk, rsf_nr, type = "response", progress = "text")
+
+pred_rsf_stk <- stack(pred_rsf_stk, rsf_pred)
+}
+
+names(pred_rsf_stk) <- names(data_list)
+```
+
+```{r}
+#crop predictions by boundary made in arc pro (based on spp occurrences in northern part of park)
+crop_bound <- st_read("./Data/spp_predict_bound.shp")
+
+pred_rsf_stk_cp <- crop(pred_rsf_stk, st_transform(crop_bound, crs = projection(pred_rsf_stk)))
+
+names(pred_rsf_stk_cp) <- names(data_list)
+
+#save as tiff
+for(i in 1:20){
+writeRaster(pred_rsf_stk_cp[[i]], filename = paste0("./Code output/rsf_pred/rsf_pred_set1_",
+              str_replace(names(pred_rsf_stk_cp)[i], "\\..*", ""), "_",
+              str_replace(names(pred_rsf_stk_cp)[i], ".*\\.", "")),  
+            format = "GTiff", overwrite = TRUE)
+}
+```
+
+##Create prediction rasters based on overlapping species predictions by season
+If raster values > 90% quantile, set those raster cells to 1 for each species and season.
+Then, add raster values of 1 for all species per season and create variable listing
+contributing species per raster cell, allowing you to view species overlap/predicted
+high use areas.
+
+```{r}
+pred_summer <- stack(pred_rsf_stk_cp[[11:15]])
+names(pred_summer) <- names(pred_rsf_stk_cp[[11:15]])
+
+q_bh <- quantile(pred_summer[[1]], 0.90)
+q_bi <- quantile(pred_summer[[2]], 0.90)
+q_md <- quantile(pred_summer[[3]], 0.90)
+q_el <- quantile(pred_summer[[4]], 0.90)
+q_ph <- quantile(pred_summer[[5]], 0.90)
+
+calc_bh <- function(value) ifelse(value >= q_bh, 1, 0)
+calc_bi <- function(value) ifelse(value >= q_bi, 2, 0)
+calc_md <- function(value) ifelse(value >= q_md, 4, 0)
+calc_el <- function(value) ifelse(value >= q_el, 8, 0)
+calc_ph <- function(value) ifelse(value >= q_ph, 16, 0)
+
+cond_rast_bh <- calc(pred_summer[[1]], calc_bh)
+cond_rast_bi <- calc(pred_summer[[2]], calc_bi)
+cond_rast_md <- calc(pred_summer[[3]], calc_md)
+cond_rast_el <- calc(pred_summer[[4]], calc_el)
+cond_rast_ph <- calc(pred_summer[[5]], calc_ph)
+
+ol_spp_summ <- overlay(cond_rast_bh, cond_rast_bi, cond_rast_md, cond_rast_el,
+                       cond_rast_ph, fun = sum)
+
+
+
+
+
+fact_ol_rast <- as.factor(ol_spp_summ)
+x <- levels(fact_ol_rast)[[1]]
+x$species <- c("", "bighorn", "bison", "bighorn-bison", "deer", "bighorn-deer",
+               "bison-deer", "bighorn-bison-deer", "elk", "bighorn-elk", "bison-elk",
+               "deer-elk", "bison-deer-elk", "pronghorn", "bighorn-pronghorn",
+               "bison-pronghorn", "bighorn-bison-pronghorn", "deer-pronghorn",
+               "bighorn-deer-pronghorn", "bison-deer-pronghorn", 
+               "bighorn-bison-deer-pronghorn", "bison-elk-pronghorn")
+levels(fact_ol_rast) <- x
+
+
+
+stk <- stack(f, f2)
+
+cb <- overlay(f, f2, fun = sum)
+
+fd <- as.data.frame(f)
+fd2 <- as.data.frame(f2)
+
+dc <- data.frame(species = paste0(fd$species, fd2$species))
+
+
+t <- rasterize(cb)
+
+
+```
+
+```{r}
+#create 0 to 1 rasters for each species based on 0.8 prob cutoff
+pred_summ_cond <- calc(pred_summer, fun = function(v)ifelse(v>=0.8, 1, 0))
+names(pred_summ_cond) <- names(pred_rsf_stk_cp[[11:15]])
+
+#save as tiff
+for(i in 1:5){
+writeRaster(pred_summ_cond[[i]], filename = paste0("./Code output/rsf_pred/rsf_pred_set1_cond_80perc_",
+              str_replace(names(pred_summ_cond)[i], "\\..*", ""), "_",
+              str_replace(names(pred_summ_cond)[i], ".*\\.", "")),  
+            format = "GTiff", overwrite = TRUE)
+}
+
+```
+
+
+
+#Extra code
 
 ```{r}
 # ----------------------------------#
@@ -239,9 +504,7 @@ abline(v=-2.850350)  # this is the main effect (i.e., commulation level effect) 
 
 
 
-```{r}
-save.image("RSFs_comm.RData")
-```
+
 
 
 

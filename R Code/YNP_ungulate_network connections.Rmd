@@ -1,0 +1,856 @@
+---
+title: "YNP ungulate network connections"
+author: "Molly Caldwell"
+date: "3/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(spatsoc)
+library(data.table)
+library(asnipe)
+library(igraph)
+library(circlize)
+library(ggplot2)
+library(GGally)
+library(network)
+library(sna)
+library(maps)
+library(ggnetwork)
+library(ggpubr)
+library(raster)
+library(rgdal)
+library(ggmap)
+library(geosphere)
+
+# if (!requireNamespace("BiocManager", quietly=TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("ComplexHeatmap")
+library(ComplexHeatmap)
+```
+
+#Prep data
+
+```{r}
+#load seasonal gps data- all spp, 2 hr fixes
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+
+#subset 2018 spring
+data_all <- data_all %>%
+  filter(yr == 2018 & season == "spring")
+```
+
+```{r}
+#define projection
+proj <- st_crs(data_all)[[1]]
+
+#split geometry into x y columns
+data_xy <- data_all %>%
+    mutate(x = unlist(purrr::map(data_all$geometry,1)),
+           y = unlist(purrr::map(data_all$geometry,2)))
+
+data_xy$geometry <- NULL
+data_xy$date2 <- NULL
+
+#convert data to data table for spatsoc
+data_dt <- setDT(data_xy)
+
+```
+
+#Spatial network- by points (100 m, within 12 hours)
+
+##Temporal grouping
+
+```{r}
+#temporal group with threshold of x hours
+g_data <- group_times(DT = data_dt, datetime = 'date', threshold = "12 hours") #change hours depending on desired threshold
+```
+
+##Spatial grouping (points)
+
+```{r}
+#spatial group (by GPS points) with threshold 100 meters
+group_pts(DT = g_data, threshold = 100, id = 'cid', 
+                        coords = c('x', 'y'), timegroup = 'timegroup') #threshold units based on GPS data CRS
+```
+
+##Build observed network
+
+```{r}
+#Generate group by individual matrix
+gbiMtrx_pts <- get_gbi(DT = g_data, group = 'group', id = 'cid')
+
+#build observed social network from spatial grouping by points
+net_pts <- get_network(gbiMtrx_pts, data_format = "GBI",
+                       association_index = "SRI")
+```
+
+##Calculate observed network metrics and graph   
+
+```{r}
+#generate graph
+g_net_pts <- graph.adjacency(net_pts, "undirected", diag = FALSE,
+                             weighted = TRUE)
+
+
+#metrics for all individuals
+# net_pts_metrics <- data.table(centrality = evcent(g_net_pts)$vector,
+#                               strength = graph.strength(g_net_pts),
+#                               degree = degree(g_net_pts),
+#                               ID = names(degree(g_net_pts)),
+#                               yr = data_dt_ss[, unique(year)])
+
+#plot graph
+
+plot(g_net_pts)
+
+g_net_pts %>%
+  add_layout_(with_fr()) %>%
+  plot()
+```
+
+```{r}
+#chord diagram
+
+#list each species cids
+u_cid <- unique(data_all$cid)
+bison <- u_cid[grepl('BI', u_cid)]
+bighorn <- u_cid[grepl('BH', u_cid)]
+pronghorn <- u_cid[grepl('PR', u_cid)]
+deer <- u_cid[grepl('MD', u_cid)]
+elk <- u_cid[grepl('EL', u_cid)]
+
+#create df assigning color to each cid by species
+color_df <- data.frame(cid = c(bison, bighorn, pronghorn, deer, elk), 
+                 color = c(rep("orange", length.out = length(bison)), 
+                           rep("red", length.out = length(bighorn)),
+                           rep("purple", length.out = length(pronghorn)),
+                           rep("green", length.out = length(deer)),
+                           rep("blue", length.out = length(elk))))
+
+
+
+grid.col = as.vector(color_df$color)
+
+names(grid.col) <- color_df$cid
+
+#chord diagram colored by species
+species <- as.factor(c("bison", "bighorn", "deer", "elk", "pronghorn"))
+  
+##legend
+  lgd_col = Legend(
+labels = species,                 
+title = "Species",                 
+type = "point",                 
+background = unique(grid.col))
+
+#plot chord diagram
+plot.new()
+chordDiagram(net_pts, grid.col = grid.col, scale = TRUE, annotationTrack = "grid",
+             annotationTrackHeight = c(0.03, 0.01))
+legend("bottomright", bty = "n", legend = species, fill = c("orange", "red", "green",
+                                              "blue", "purple"))
+```
+
+##Network graph over landscape map and species' connection type summary
+
+```{r}
+  
+#create network object
+nw_line <- network(net_pts, directed = TRUE)
+
+#create geocoded node coordinates (based on centroid of all GPS points by cid)
+  ##create df of average location for each cid 
+cid_avg <- data_dt %>%
+  group_by(cid) %>%
+  summarise(lat = mean(x), long = mean(y))
+
+  ##add coords to network object
+nw_line %v% "lat" <- if_else(cid_avg$cid == network.vertex.names(nw_line), cid_avg$lat, 999)
+nw_line %v% "lon" <- if_else(cid_avg$cid == network.vertex.names(nw_line), cid_avg$long, 999)
+
+#add species to network object
+nw_line %v% "species" <- if_else(grepl('BI', network.vertex.names(nw_line)), "bison",
+                          if_else(grepl('BH', network.vertex.names(nw_line)), "bighorn",
+                          if_else(grepl('MD', network.vertex.names(nw_line)), "deer",
+                          if_else(grepl('PR', network.vertex.names(nw_line)), "pronghorn",
+                          if_else(grepl('EL', network.vertex.names(nw_line)), "elk", "NA")))))
+
+# compute degree centrality
+nw_line %v% "degree" <- degree(nw_line, gmode = "digraph")
+```
+
+###Network map
+
+```{r}
+#create data frame of nodes and node locations
+nodes_cid <- nw_line$val
+nodes_cid_df <- do.call(rbind.data.frame, nodes_cid)
+
+#set projection to gps data
+proj <- st_crs(data_all)[[1]]
+
+#reproject and set as spatial points object for mapping
+nodes_cid_sp <- SpatialPointsDataFrame(nodes_cid_df, 
+                                       coords = nodes_cid_df[,3:4], 
+                                       proj4string = CRS(proj))
+
+
+nodes_cid_tr <- spTransform(nodes_cid_sp, CRS("+init=epsg:4326"))
+nodes_cid_tr <- as.data.frame(nodes_cid_tr)
+nodes_cid_tr$lat <- NULL
+nodes_cid_tr$lon <- NULL
+
+nodes_cid_tr <- nodes_cid_tr %>%
+  rename(lat = lat.1, lon = lon.1)
+
+#create data frame of node connections and frequencies
+
+##extract data of head and tails of node connections
+lines_cid <- as.data.frame(nw_line)
+
+##transform heads and tails to source and target
+conn_cid <- lines_cid %>%
+  rename(target = .tail, source = .head)
+
+##summarize frequency of connections
+conn_cid <- conn_cid %>%
+  group_by(target, source) %>%
+  dplyr::mutate(freq = 1)
+
+
+#create basemap of study area
+  #ynp <- get_googlemap(center = c(lon = -110.50, lat = 44.9), zoom = 10, 
+                    # maptype = "hybrid")
+  #^not working since google update with access key needed...
+
+# Tried this workaround with basemaps, but it's not communicating with ggplot- needs to be fixed
+#library(basemaps)
+# 
+# set_defaults(map_service = "osm", map_type = "topographic")
+# 
+# ext <- st_make_grid(st_bbox(data_all), n = 1) #create extent based on gps data
+# 
+# base_map <- basemap_ggplot(ext) + labs(x = "Longitude", y = "Latitude")
+
+
+#add lat and lon to cid connections to create arcs (x,y and xend,yend)
+nodes_xy <- nodes_cid_tr %>%
+  dplyr::select(vertex.names, lat, lon, species)
+
+conn_cid_xy <- left_join(conn_cid, nodes_xy, by = c("source" = "vertex.names"))
+conn_cid_xy <- left_join(conn_cid_xy, nodes_xy, by = c("target" = "vertex.names"))
+
+#add metric for proportion connections same species/different spp
+  ##identify whether each connection is same species or different
+  conn_cid_xy <- conn_cid_xy %>%
+    mutate(same_spp = if_else(species.x == species.y, 1, 0)) %>%
+    mutate(diff_spp = if_else(species.x != species.y, 1, 0))
+
+  ##create data frame with sum of same spp/diff spp connections per source cid
+  conn_spp_summ <- conn_cid_xy %>%
+    group_by(source) %>%
+    summarize(same_spp = sum(same_spp), diff_spp = sum(diff_spp))
+  
+  ##add percent connections that are different species
+  conn_spp_summ <- conn_spp_summ %>%
+    mutate(perc_diff = (diff_spp/(same_spp + diff_spp)*100))
+  
+  ##join same/diff connection summary to node data
+  nodes_cid_tr <- left_join(nodes_cid_tr, conn_spp_summ, 
+                            by = c("vertex.names" = "source"))
+  
+  ##add 0s for same/different connections for individuals with 0 connections
+  nodes_cid_tr <- nodes_cid_tr %>%
+    mutate(perc_diff = if_else(is.na(perc_diff), 0, perc_diff)) %>%
+    rename("Percent interspecific connections" = perc_diff)
+  
+#map  nodes and connection lines- add basemap once that's working again
+  ggplot() + 
+  geom_curve(data = conn_cid_xy, aes(x = lat.x, y = lon.x, xend = lat.y, 
+                                     yend = lon.y, color = species.x),
+                      curvature = 0.1, angle = 90, alpha = 0.4, size = 1,
+                      show.legend = FALSE) +
+  geom_point(data = nodes_cid_tr, aes(x = lat, y = lon, fill = species,
+                                      size = `Percent interspecific connections`), 
+             colour="black", pch = 21, stroke = 1.2, alpha = 0.7) + 
+  scale_color_manual(values = c("bison" = "darkgoldenrod3",
+                     "bighorn" = "red2",
+                     "deer" = "chartreuse3",
+                     "elk" = "dodgerblue3",
+                     "pronghorn" = "darkorchid4")) +
+  scale_fill_manual(name = "Individual centroids", values = c("bison" = "darkgoldenrod3",
+                     "bighorn" = "red2",
+                     "deer" = "chartreuse3",
+                     "elk" = "dodgerblue3",
+                     "pronghorn" = "darkorchid4")) + coord_cartesian()
+
+```
+
+###Species connection type summary and graphs
+
+```{r}
+#summary of species connections
+  ##add 0s for same/different connections for individuals with 0 connections
+  nodes_cid_tr <- nodes_cid_tr %>%
+    mutate(same_spp = if_else(is.na(same_spp), 0, same_spp)) %>%
+    mutate(diff_spp = if_else(is.na(diff_spp), 0, diff_spp)) %>%
+    #rename(perc_diff = `Percent interspecific connections`) %>%
+  mutate(tot_conn = same_spp + diff_spp)
+
+#summary table- means by species
+nodes_spp_summ <- nodes_cid_tr %>%
+  group_by(species) %>%
+  summarize(mean_tot_conn = mean(tot_conn), sd_tot_conn = sd(tot_conn), 
+            mean_same_spp_conn = mean(same_spp), 
+            sd_same_spp_conn = sd(same_spp),
+            mean_diff_spp_conn = mean(diff_spp), 
+            sd_diff_spp_conn = sd(diff_spp), .groups = "keep")
+```
+
+```{r}
+library(scales)
+#graph summaries spp connections
+tot <- ggplot(nodes_spp_summ, aes(x = species, y = mean_tot_conn, color = species)) +
+  geom_errorbar(aes(ymin = (mean_tot_conn - sd_tot_conn), 
+                    ymax = (mean_tot_conn + sd_tot_conn)),
+                width = 0.2) +
+  scale_y_continuous(limits = c(0,55), oob = rescale_none) +
+  geom_point() +
+  xlab("Species") +
+  ylab("Mean number of connections") +
+  ggtitle("Total connections") +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# same <- ggplot(nodes_spp_summ, aes(x = species, y = mean_same_spp_conn, color = species)) +
+#   geom_errorbar(aes(ymin = (mean_same_spp_conn - sd_same_spp_conn), 
+#                     ymax = (mean_same_spp_conn + sd_same_spp_conn)),
+#                 width = 0.2) +
+#   scale_y_continuous(limits = c(0,55), oob = rescale_none) +
+#   geom_point() +
+#   xlab("Species") +
+#   ylab("") +
+#   ggtitle("Intraspecies connections") +
+#   theme(legend.position = "none") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+# 
+# diff <- ggplot(nodes_spp_summ, aes(x = species, y = mean_diff_spp_conn, color = species)) +
+#   geom_errorbar(aes(ymin = (mean_diff_spp_conn - sd_diff_spp_conn), 
+#                     ymax = (mean_diff_spp_conn + sd_diff_spp_conn)),
+#                 width = 0.2) +
+#   scale_y_continuous(limits = c(0,55), oob = rescale_none) +
+#   geom_point() +
+#   xlab("Species") +
+#   ylab("") +
+#   ggtitle("Interspecies connections") +
+#   theme(legend.position = "none") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+# 
+# #plots on same page
+# ggarrange(tot, same, diff, ncol = 3)
+```
+
+```{r}
+#proportion intra and interspecies connections bar graph
+  ##create data of proportions connections
+  nodes_prop <- nodes_cid_tr %>%
+    mutate(prop_same = same_spp/tot_conn) %>%
+    mutate(prop_diff = diff_spp/tot_conn) %>%
+    mutate(prop_same = if_else(is.na(prop_same), 0, prop_same)) %>%
+    mutate(prop_diff = if_else(is.na(prop_diff), 0, prop_diff))
+
+  ##average proportions by spp
+  nodes_prop_mean <- nodes_prop %>%
+    group_by(species) %>%
+    summarize(intraspecies = mean(prop_same),
+              interspecies = mean(prop_diff),
+              .groups = "keep")
+  
+  ##sd proportions by spp
+  nodes_prop_sd <- nodes_prop %>%
+    group_by(species) %>%
+    summarize(intraspecies = sd(prop_same),
+              interspecies = sd(prop_diff),
+              .groups = "keep")
+  
+  ##stack data for graphing
+  prop_mean_stack <- melt(nodes_prop_mean, id.var = c("species"), 
+                          variable.name = "connection_type",
+                          value.name = "mean_proportion")
+  prop_sd_stack <- melt(nodes_prop_sd, id.var = c("species"),
+                        variable.name = "connection_type",
+                        value.name = "sd_proportion")
+  
+  ##join mean and sd data
+  prop_conn <- left_join(prop_mean_stack, prop_sd_stack, 
+                         by = c("species", "connection_type"))
+  
+#graph
+ggplot(prop_conn, aes(fill = connection_type, y = mean_proportion, x = species)) +
+    geom_bar(position = "dodge", stat = "identity", alpha = 0.5) +
+    geom_errorbar(aes(ymin = mean_proportion - sd_proportion, 
+                      ymax = mean_proportion + sd_proportion), width=0.2,
+                  colour="orange", position = position_dodge(.9)) +
+    scale_y_continuous(limits = c(0,1), oob = rescale_none) +
+  xlab("Species") +
+  ylab("Mean proportion of total connections") +
+  ggtitle("Proportion of intra- and interspecies connections") +
+    scale_fill_discrete(name = "Connection type")
+```
+
+```{r}
+#proportion interspecies connections with species colored graph
+spp_conn <- conn_cid_xy %>%
+  group_by(species.x, species.y) %>%
+  summarize(freq_spp = n(), .groups = "keep") %>%
+  mutate(conn_type = if_else(species.x == species.y, "Same", "Diff.")) %>%
+  mutate(species.x = if_else(species.x == "bighorn", "Bighorn",
+                   if_else(species.x == "bison", "Bison",
+                   if_else(species.x == "pronghorn", "Pronghorn",
+                   if_else(species.x == "elk", "Elk",
+                   if_else(species.x == "deer", "Mule deer", "NA")))))) %>%
+  mutate(species.y = if_else(species.y == "bighorn", "Bighorn",
+                   if_else(species.y == "bison", "Bison",
+                   if_else(species.y == "pronghorn", "Pronghorn",
+                   if_else(species.y == "elk", "Elk",
+                   if_else(species.y == "deer", "Mule deer", "NA")))))) %>%
+  mutate(conn_type = factor(conn_type, levels = c("Same", "Diff."))) %>%
+  rename("Species" = species.y) %>%
+  ungroup() %>%
+  group_by(species.x) %>%
+  mutate(prop_conn = freq_spp/sum(freq_spp)) 
+
+p1 <- ggplot(spp_conn, aes(x = conn_type, y = prop_conn, fill = Species)) +
+  geom_col(position = "stack") +
+  facet_grid(~species.x) +
+  scale_fill_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
+  theme(text = element_text(size = 16)) +
+  xlab("Connection type") +
+  ylab("Proportion connections") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  scale_y_continuous(limits = c(0,1), oob = rescale_none) 
+
+
+g1 <- ggplot_gtable(ggplot_build(p1))
+stripr <- which(grepl('strip-t', g1$layout$name))
+fills <- c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")
+k <- 1
+for (i in stripr) {
+j <- which(grepl('rect', g1$grobs[[i]]$grobs[[1]]$childrenOrder))
+g1$grobs[[i]]$grobs[[1]]$children[[j]]$gp$fill <- fills[k]
+k <- k+1
+}
+grid.draw(g1)
+```
+
+
+
+####1hr- same code as above, 1hr time threshold
+#Spatial network- by points (100 m, within 1 hours)
+
+##Temporal grouping
+
+```{r}
+#temporal group with threshold of x hours
+g_data1 <- group_times(DT = data_dt, datetime = 'date', threshold = "1 hour") #change hours depending on desired threshold
+```
+
+##Spatial grouping (points)
+
+```{r}
+#spatial group (by GPS points) with threshold 100 meters
+group_pts(DT = g_data1, threshold = 100, id = 'cid', 
+                        coords = c('x', 'y'), timegroup = 'timegroup') #threshold units based on GPS data CRS
+```
+
+##Build observed network
+
+```{r}
+#Generate group by individual matrix
+gbiMtrx_pts1 <- get_gbi(DT = g_data1, group = 'group', id = 'cid')
+
+#build observed social network from spatial grouping by points
+net_pts1 <- get_network(gbiMtrx_pts1, data_format = "GBI",
+                       association_index = "SRI")
+```
+
+##Calculate observed network metrics and graph   
+
+```{r}
+#generate graph
+g_net_pts1 <- graph.adjacency(net_pts, "undirected", diag = FALSE,
+                             weighted = TRUE)
+
+
+#metrics for all individuals
+# net_pts_metrics <- data.table(centrality = evcent(g_net_pts)$vector,
+#                               strength = graph.strength(g_net_pts),
+#                               degree = degree(g_net_pts),
+#                               ID = names(degree(g_net_pts)),
+#                               yr = data_dt_ss[, unique(year)])
+
+#plot graph
+
+plot(g_net_pts)
+
+g_net_pts %>%
+  add_layout_(with_fr()) %>%
+  plot()
+```
+
+```{r}
+#chord diagram
+
+#list each species cids
+u_cid <- unique(data_all$cid)
+bison <- u_cid[grepl('BI', u_cid)]
+bighorn <- u_cid[grepl('BH', u_cid)]
+pronghorn <- u_cid[grepl('PR', u_cid)]
+deer <- u_cid[grepl('MD', u_cid)]
+elk <- u_cid[grepl('EL', u_cid)]
+
+#create df assigning color to each cid by species
+color_df <- data.frame(cid = c(bison, bighorn, pronghorn, deer, elk), 
+                 color = c(rep("orange", length.out = length(bison)), 
+                           rep("red", length.out = length(bighorn)),
+                           rep("purple", length.out = length(pronghorn)),
+                           rep("green", length.out = length(deer)),
+                           rep("blue", length.out = length(elk))))
+
+
+
+grid.col = as.vector(color_df$color)
+
+names(grid.col) <- color_df$cid
+
+#chord diagram colored by species
+species <- as.factor(c("bison", "bighorn", "deer", "elk", "pronghorn"))
+  
+##legend
+  lgd_col = Legend(
+labels = species,                 
+title = "Species",                 
+type = "point",                 
+background = unique(grid.col))
+
+plot.new()
+chordDiagram(net_pts, grid.col = grid.col, scale = TRUE, annotationTrack = "grid",
+             annotationTrackHeight = c(0.03, 0.01))
+legend("bottomright", bty = "n", legend = species, fill = c("orange", "red", "green",
+                                              "blue", "purple"))
+```
+
+##Network graph over landscape map and species' connection type summary
+
+```{r}
+  
+#create network object
+nw_line1 <- network(net_pts1, directed = TRUE)
+
+#create geocoded node coordinates (based on centroid of all GPS points by cid)
+  ##create df of average location for each cid 
+cid_avg1 <- data_dt %>%
+  group_by(cid) %>%
+  summarise(lat = mean(x), long = mean(y))
+
+  ##add coords to network object
+nw_line1 %v% "lat" <- if_else(cid_avg1$cid == network.vertex.names(nw_line1), cid_avg1$lat, 999)
+nw_line1 %v% "lon" <- if_else(cid_avg1$cid == network.vertex.names(nw_line1), cid_avg1$long, 999)
+
+#add species to network object
+nw_line1 %v% "species" <- if_else(grepl('BI', network.vertex.names(nw_line1)), "bison",
+                          if_else(grepl('BH', network.vertex.names(nw_line1)), "bighorn",
+                          if_else(grepl('MD', network.vertex.names(nw_line1)), "deer",
+                          if_else(grepl('PR', network.vertex.names(nw_line1)), "pronghorn",
+                          if_else(grepl('EL', network.vertex.names(nw_line1)), "elk", "NA")))))
+
+# compute degree centrality
+nw_line1 %v% "degree" <- degree(nw_line1, gmode = "digraph")
+```
+
+###Network map
+
+```{r}
+#create data frame of nodes and node locations
+nodes_cid1 <- nw_line1$val
+nodes_cid_df1 <- do.call(rbind.data.frame, nodes_cid1)
+
+#set projection to gps data
+proj <- st_crs(data_all)[[1]]
+
+#reproject and set as spatial points object for mapping
+nodes_cid_sp1 <- SpatialPointsDataFrame(nodes_cid_df1, 
+                                       coords = nodes_cid_df1[,3:4], 
+                                       proj4string = CRS(proj))
+
+
+nodes_cid_tr1 <- spTransform(nodes_cid_sp1, CRS("+init=epsg:4326"))
+nodes_cid_tr1 <- as.data.frame(nodes_cid_tr1)
+nodes_cid_tr1$lat <- NULL
+nodes_cid_tr1$lon <- NULL
+
+nodes_cid_tr1 <- nodes_cid_tr1 %>%
+  rename(lat = lat.1, lon = lon.1)
+
+#create data frame of node connections and frequencies
+
+##extract data of head and tails of node connections
+lines_cid1 <- as.data.frame(nw_line1)
+
+##transform heads and tails to source and target
+conn_cid1 <- lines_cid1 %>%
+  rename(target = .tail, source = .head)
+
+##summarize frequency of connections
+conn_cid1 <- conn_cid1 %>%
+  group_by(target, source) %>%
+  dplyr::mutate(freq = 1)
+
+
+#create basemap of study area
+  ynp <- get_googlemap(center = c(lon = -110.50, lat = 44.9), zoom = 10, 
+                     maptype = "hybrid")
+library(basemaps)
+
+set_defaults(map_service = "osm", map_type = "topographic")
+
+ext <- st_make_grid(st_bbox(data_all), n = 1) #create extent based on gps data
+
+base_map <- basemap_ggplot(ext) + labs(x = "Longitude", y = "Latitude")
+
+ #create arcs for node connections
+# for(i in 1:nrow(conn_cid)){
+#     node1 <- nodes_cid_tr[nodes_cid_tr$vertex.names == conn_cid[i,]$source,]
+#     node2 <- nodes_cid_tr[nodes_cid_tr$vertex.names == conn_cid[i,]$target,]
+#     
+#     arc <- gcIntermediate(c(node1[1,]$lat, node1[1,]$lon), 
+#                            c(node2[1,]$lat, node2[1,]$lon), 
+#                            n=1000, addStartEnd=TRUE )
+#     
+# }
+
+
+#add lat and lon to cid connections to create arcs (x,y and xend,yend)
+nodes_xy1 <- nodes_cid_tr1 %>%
+  dplyr::select(vertex.names, lat, lon, species)
+
+conn_cid_xy1 <- left_join(conn_cid1, nodes_xy1, by = c("source" = "vertex.names"))
+conn_cid_xy1 <- left_join(conn_cid_xy1, nodes_xy1, by = c("target" = "vertex.names"))
+
+#add metric for proportion connections same species/different spp
+  ##identify whether each connection is same species or different
+  conn_cid_xy1 <- conn_cid_xy1 %>%
+    mutate(same_spp = if_else(species.x == species.y, 1, 0)) %>%
+    mutate(diff_spp = if_else(species.x != species.y, 1, 0))
+
+  ##create data frame with sum of same spp/diff spp connections per source cid
+  conn_spp_summ1 <- conn_cid_xy1 %>%
+    group_by(source) %>%
+    summarize(same_spp = sum(same_spp), diff_spp = sum(diff_spp))
+  #save csv
+  # write.csv(conn_spp_summ1, "./Code output/allspp_alldata_1hrnetcon_byindiv_4.25.22.csv")
+  
+  ##add percent connections that are different species
+  conn_spp_summ1 <- conn_spp_summ1 %>%
+    mutate(perc_diff = (diff_spp/(same_spp + diff_spp)*100))
+  
+  ##join same/diff connection summary to node data
+  nodes_cid_tr1 <- left_join(nodes_cid_tr1, conn_spp_summ1, 
+                            by = c("vertex.names" = "source"))
+  
+  ##add 0s for same/different connections for individuals with 0 connections
+  nodes_cid_tr1 <- nodes_cid_tr1 %>%
+    mutate(perc_diff = if_else(is.na(perc_diff), 0, perc_diff)) %>%
+    rename("Percent interspecific connections" = perc_diff)
+  
+#map basemap, nodes, and connection lines
+ggplot() +
+  geom_curve(data = conn_cid_xy, aes(x = lat.x, y = lon.x, xend = lat.y, 
+                                     yend = lon.y, color = species.x),
+                      curvature = 0.1, angle = 90, alpha = 0.4, size = 1,
+                      show.legend = FALSE) +
+  geom_point(data = nodes_cid_tr, aes(x = lat, y = lon, fill = species,
+                                      size = `Percent interspecific connections`), 
+             colour="black", pch = 21, stroke = 1.2, alpha = 0.7) + 
+  scale_color_manual(values = c("bison" = "darkgoldenrod3",
+                     "bighorn" = "red2",
+                     "deer" = "chartreuse3",
+                     "elk" = "dodgerblue3",
+                     "pronghorn" = "darkorchid4")) +
+  scale_fill_manual(name = "Individual centroids", values = c("bison" = "darkgoldenrod3",
+                     "bighorn" = "red2",
+                     "deer" = "chartreuse3",
+                     "elk" = "dodgerblue3",
+                     "pronghorn" = "darkorchid4")) + coord_cartesian()
+
+```
+
+###Species connection type summary and graphs
+
+```{r}
+#summary of species connections
+  ##add 0s for same/different connections for individuals with 0 connections
+  nodes_cid_tr1 <- nodes_cid_tr1 %>%
+    mutate(same_spp = if_else(is.na(same_spp), 0, same_spp)) %>%
+    mutate(diff_spp = if_else(is.na(diff_spp), 0, diff_spp)) %>%
+    #rename(perc_diff = `Percent interspecific connections`) %>%
+  mutate(tot_conn = same_spp + diff_spp)
+
+#summary table- means by species
+nodes_spp_summ1 <- nodes_cid_tr1 %>%
+  group_by(species) %>%
+  summarize(mean_tot_conn = mean(tot_conn), sd_tot_conn = sd(tot_conn), 
+            mean_same_spp_conn = mean(same_spp), 
+            sd_same_spp_conn = sd(same_spp),
+            mean_diff_spp_conn = mean(diff_spp), 
+            sd_diff_spp_conn = sd(diff_spp), .groups = "keep")
+```
+
+```{r}
+library(scales)
+#graph summaries spp connections
+tot <- ggplot(nodes_spp_summ, aes(x = species, y = mean_tot_conn, color = species)) +
+  geom_errorbar(aes(ymin = (mean_tot_conn - sd_tot_conn), 
+                    ymax = (mean_tot_conn + sd_tot_conn)),
+                width = 0.2) +
+  scale_y_continuous(limits = c(0,55), oob = rescale_none) +
+  geom_point() +
+  xlab("Species") +
+  ylab("Mean number of connections") +
+  ggtitle("Total connections") +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# same <- ggplot(nodes_spp_summ, aes(x = species, y = mean_same_spp_conn, color = species)) +
+#   geom_errorbar(aes(ymin = (mean_same_spp_conn - sd_same_spp_conn), 
+#                     ymax = (mean_same_spp_conn + sd_same_spp_conn)),
+#                 width = 0.2) +
+#   scale_y_continuous(limits = c(0,55), oob = rescale_none) +
+#   geom_point() +
+#   xlab("Species") +
+#   ylab("") +
+#   ggtitle("Intraspecies connections") +
+#   theme(legend.position = "none") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+# 
+# diff <- ggplot(nodes_spp_summ, aes(x = species, y = mean_diff_spp_conn, color = species)) +
+#   geom_errorbar(aes(ymin = (mean_diff_spp_conn - sd_diff_spp_conn), 
+#                     ymax = (mean_diff_spp_conn + sd_diff_spp_conn)),
+#                 width = 0.2) +
+#   scale_y_continuous(limits = c(0,55), oob = rescale_none) +
+#   geom_point() +
+#   xlab("Species") +
+#   ylab("") +
+#   ggtitle("Interspecies connections") +
+#   theme(legend.position = "none") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+# 
+# #plots on same page
+# ggarrange(tot, same, diff, ncol = 3)
+```
+
+```{r}
+#proportion intra and interspecies connections bar graph
+  ##create data of proportions connections
+  nodes_prop1 <- nodes_cid_tr1 %>%
+    mutate(prop_same = same_spp/tot_conn) %>%
+    mutate(prop_diff = diff_spp/tot_conn) %>%
+    mutate(prop_same = if_else(is.na(prop_same), 0, prop_same)) %>%
+    mutate(prop_diff = if_else(is.na(prop_diff), 0, prop_diff))
+
+  ##average proportions by spp
+  nodes_prop_mean1 <- nodes_prop1 %>%
+    group_by(species) %>%
+    summarize(intraspecies = mean(prop_same),
+              interspecies = mean(prop_diff),
+              .groups = "keep")
+  
+  ##sd proportions by spp
+  nodes_prop_sd1 <- nodes_prop1 %>%
+    group_by(species) %>%
+    summarize(intraspecies = sd(prop_same),
+              interspecies = sd(prop_diff),
+              .groups = "keep")
+  
+  ##stack data for graphing
+  prop_mean_stack <- melt(nodes_prop_mean, id.var = c("species"), 
+                          variable.name = "connection_type",
+                          value.name = "mean_proportion")
+  prop_sd_stack <- melt(nodes_prop_sd, id.var = c("species"),
+                        variable.name = "connection_type",
+                        value.name = "sd_proportion")
+  
+  ##join mean and sd data
+  prop_conn <- left_join(prop_mean_stack, prop_sd_stack, 
+                         by = c("species", "connection_type"))
+  
+#graph
+ggplot(prop_conn, aes(fill = connection_type, y = mean_proportion, x = species)) +
+    geom_bar(position = "dodge", stat = "identity", alpha = 0.5) +
+    geom_errorbar(aes(ymin = mean_proportion - sd_proportion, 
+                      ymax = mean_proportion + sd_proportion), width=0.2,
+                  colour="orange", position = position_dodge(.9)) +
+    scale_y_continuous(limits = c(0,1), oob = rescale_none) +
+  xlab("Species") +
+  ylab("Mean proportion of total connections") +
+  ggtitle("Proportion of intra- and interspecies connections") +
+    scale_fill_discrete(name = "Connection type")
+```
+
+```{r}
+#proportion interspecies connections with species colored graph
+spp_conn <- conn_cid_xy1 %>%
+  group_by(species.x, species.y) %>%
+  summarize(freq_spp = n(), .groups = "keep") %>%
+  mutate(conn_type = if_else(species.x == species.y, "Same", "Diff.")) %>%
+  mutate(species.x = if_else(species.x == "bighorn", "Bighorn",
+                   if_else(species.x == "bison", "Bison",
+                   if_else(species.x == "pronghorn", "Pronghorn",
+                   if_else(species.x == "elk", "Elk",
+                   if_else(species.x == "deer", "Mule deer", "NA")))))) %>%
+  mutate(species.y = if_else(species.y == "bighorn", "Bighorn",
+                   if_else(species.y == "bison", "Bison",
+                   if_else(species.y == "pronghorn", "Pronghorn",
+                   if_else(species.y == "elk", "Elk",
+                   if_else(species.y == "deer", "Mule deer", "NA")))))) %>%
+  mutate(conn_type = factor(conn_type, levels = c("Same", "Diff."))) %>%
+  rename("Species" = species.y) %>%
+  ungroup() %>%
+  group_by(species.x) %>%
+  mutate(prop_conn = freq_spp/sum(freq_spp)) 
+
+p2 <- ggplot(spp_conn, aes(x = conn_type, y = prop_conn, fill = Species)) +
+  geom_col(position = "stack") +
+  facet_grid(~species.x) +
+  scale_fill_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
+  theme(text = element_text(size = 16)) +
+  xlab("Connection type") +
+  ylab("Proportion connections") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(strip.background = element_blank(),
+  strip.text.x = element_blank()) #remove facet labels
+
+#color facet labels by spp
+# g2 <- ggplot_gtable(ggplot_build(p2))
+# stripr <- which(grepl('strip-t', g2$layout$name))
+# fills <- c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")
+# k <- 1
+# for (i in stripr) {
+# j <- which(grepl('rect', g2$grobs[[i]]$grobs[[1]]$childrenOrder))
+# g2$grobs[[i]]$grobs[[1]]$children[[j]]$gp$fill <- fills[k]
+# k <- k+1
+# }
+# grid.draw(g2)
+```

@@ -1,7 +1,7 @@
 ---
 title: "YNP ungulate RSFs_Part A_SampleAvailability"
 author: "Molly Caldwell"
-date: "2/16/2022"
+date: "3/16/2022"
 output: html_document
 ---
 
@@ -34,6 +34,8 @@ data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.r
 head(data)
 
 data <- st_as_sf(data)
+data$n_seas_days <- NULL
+data$yr_seas <- NULL
 ```
 
 ```{r}
@@ -68,19 +70,28 @@ plot(st_geometry(HRs), col=adjustcolor("grey", alpha.f=0.1),
 
 ```{r}
 #generate random points within community HR polygon
-#loop by species and season
+#loop by species and season, create gps data list to loop through
+data_list <- split(data, f = list(data$species, data$season))
 
 #list to save points by species and season
 PopRand_spp_seas <- list()
 data_pop_spp_seas <- list()
 
-for(i in 1:length(pop_poly_spp)){
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data_list","no_cores",
+                               "PopRand_spp_seas","data_pop_spp_seas"))
+
+for(i in 1:length(data_list)){
   print(paste0("i: ", i))
     
-  data_spp <- data %>% filter(species == spp[[i]])
+  data_spp <- data_list[[i]]
     
   #general equal number of points as in data
-  PopRand <- st_sample(pop_poly_spp[[i]], size=nrow(data_spp)+1000, type="random")
+  PopRand <- st_sample(comm_poly, size=nrow(data_spp)+1000, type="random")
   PopRand <- PopRand[1:nrow(data_spp)]   # you have to do this because st_sample doesn't give the exact size you are looking for (might need to change the 1000 above to a bigger number!!!!)
   nrow(data_spp)==length(PopRand)   #this MUST BE TRUE (otherwise increase the 1000 number above)
   
@@ -89,32 +100,38 @@ for(i in 1:length(pop_poly_spp)){
   #attach points to dataframe
   data_spp$used <- 1  #add response variable
   #turn random points into Spatial Points dataframe with the correct column names and attributes
-  head(data)
   PopRand <- st_sf(data.frame(used=0,   # flag random points as 0s in used column
                               id_yr_seas=data_spp$id_yr_seas,   # give random points a random id_yr_seas
                               date=data_spp$date, # give the random points a random date as well
                               cid=data_spp$cid,
-                              species = data_spp$species), # give random id
+                              species = data_spp$species,
+                              season = data_spp$season,
+                              yr = data_spp$yr), 
                    geometry=PopRand)
   PopRand <- st_transform(PopRand, crs=st_crs(data_spp))  # verify same projection
   data_pop <- rbind(data_spp, PopRand) #rbind up the used and random points
 
-  PopRand_spp[[i]] <- PopRand
-  data_pop_spp[[i]] <- data_pop
+  PopRand_spp_seas[[i]] <- PopRand
+  data_pop_spp_seas[[i]] <- data_pop
 }
 
+stopCluster(clust)   # you must stop the parallelization framework
+
+names(PopRand_spp_seas) <- names(data_list)
+names(data_pop_spp_seas) <- names(data_list)
+
 #have a quick look at what you did
-plot(pop_poly_spp[[1]])
-plot(PopRand_spp[[1]][sample(length(PopRand_spp[[1]]),3000)], add=T, col="blue", pch=".")   #sample of available points
-plot(sample_n(data %>% filter(species == spp[[1]]),3000)[,1], add=T, col="orange", pch=".")         #sample of used points
+plot(comm_poly)
+plot(PopRand_spp_seas[[1]][sample(length(PopRand_spp_seas[[1]]))],
+     add=T, col="blue", pch=".")   #sample of available points
+plot(sample_n(data_list[[1]], 2000)[,1], add=T, col="orange", pch=".") #sample of used points
 
-rm(PopRand_spp)
-nrow(data_pop_spp[[1]])
-table(data_pop_spp[[1]]$used)
-head(data_pop_spp[[1]])
-tail(data_pop_spp[[1]])
+rm(PopRand_spp_seas)
+nrow(data_pop_spp_seas[[1]])
+table(data_pop_spp_seas[[1]]$used)
+head(data_pop_spp_seas[[1]])
+tail(data_pop_spp_seas[[1]])
 ```
-
 
 #Save environment
 

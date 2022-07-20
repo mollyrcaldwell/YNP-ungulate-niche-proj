@@ -84,3 +84,71 @@ HRs <- HRs %>%
 saveRDS(HRs, "./Code output/allspp_seasonal_bufferHR_3.2022.rds")
 ```
 
+#Summary stats- mean home range size by species and season
+
+```{r}
+#load HRs
+HRs <- readRDS("./Code output/allspp_seasonal_bufferHR_3.2022.rds")
+```
+
+```{r}
+#calculate area of each HR
+HRs <- HRs %>%
+  mutate(HR_area = st_area(geometry)) %>%
+  mutate(HR_area = as.numeric(HR_area)/1000000) #convert to sq km
+```
+
+```{r}
+#summarize mean and sd by species and season
+HR_summ <- HRs %>%
+  group_by(species, season) %>%
+  summarize(mean_HR_area = mean(HR_area), sd_HR_area = sd(HR_area), 
+            .groups = "keep") %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+  
+```
+
+```{r}
+#graph
+phr <- ggplot(HR_summ, aes(x = species, y = mean_HR_area, color = species)) +
+  geom_errorbar(aes(ymin = (mean_HR_area - sd_HR_area), 
+                    ymax = (mean_HR_area + sd_HR_area)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(rows = vars(season)) +
+  xlab("Species") +
+  ylab("Mean home range size (sq. km)") +
+  ggtitle("Mean home range size") +
+  theme(legend.position = "none") 
+
+phr + ggpubr::rotate()
+```
+
+```{r}
+#graph of just spring for WY TWS poster 
+HR_spr <- HR_summ %>%
+  filter(season == "spring") %>%
+   mutate(species = if_else(species == "bighorn", "Bighorn",
+                   if_else(species == "bison", "Bison",
+                   if_else(species == "pronghorn", "Pronghorn",
+                   if_else(species == "elk", "Elk",
+                   if_else(species == "deer", "Mule deer", "NA"))))))
+
+phr <- ggplot(HR_spr, aes(x = species, y = mean_HR_area, color = species)) +
+  geom_errorbar(aes(ymin = (mean_HR_area - sd_HR_area), 
+                    ymax = (mean_HR_area + sd_HR_area)),
+                width = 0.2, size = 2) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
+  xlab("") +
+  ylab("Mean home range size (sq. km)") +
+  theme(legend.position = "none")  +
+  theme(text = element_text(size = 20))
+
+phr + ggpubr::rotate()
+```
+
+
+
+
+

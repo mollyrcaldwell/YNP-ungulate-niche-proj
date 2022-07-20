@@ -1,0 +1,280 @@
+---
+title: "YNP Ungulate Seasonal Buffer HR Overlap"
+author: "Molly Caldwell"
+date: "3/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(rgeos)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM) # fix
+library(lubridate)
+library(parallel)
+library(tidyverse)
+```
+
+```{r}
+#load HRs
+HRs <- readRDS("./Code output/allspp_seasonal_bufferHR_3.2022.rds")
+```
+
+```{r}
+#loop pairwise intersections of HRs by season-year
+  ##create season-yr variable in HR data and HR area
+HRs <- HRs %>%
+  mutate(seas_yr = paste0(season, "-", 
+                          str_replace(id_yr_seas, pattern = ".*_([^-]*)_.*", 
+                                      replacement = "\\1"))) %>%
+  mutate(HR_area = st_area(geometry))
+
+u_seas_yr <- unique(HRs$seas_yr)
+
+#create data frame to save intersect data
+hr_int_df <- cbind(id1 = "NA", id2 = "NA", hr1_area = "NA",
+                        hr2_area = "NA", int_area = "NA", season = "NA",
+                        seas_yr = "NA", spp1 = "NA", spp2 = "NA", 
+                        geometry = HRs$geometry[1])
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("HRs", "u_seas_yr", "hr_int_df"))
+
+for(i in 1:length(u_seas_yr)){
+  print(paste0("i: ", i))
+  
+  hr_data <- HRs %>% filter(seas_yr == u_seas_yr[i]) #filter data by seas-yr
+  
+  #create matrix of all pairwise id-yr-seas combinations 
+  comb_id <- combn(hr_data$id_yr_seas, 2)
+  
+  #loop intersect through all pairwise combos
+  for(j in 1:ncol(comb_id)){
+    print(paste0("comb ", j, " out of ", ncol(comb_id)))
+    
+    id1_hr_data <- hr_data %>% filter(id_yr_seas == comb_id[1, j])
+    id2_hr_data <- hr_data %>% filter(id_yr_seas == comb_id[2, j])
+    
+    #intersection and area
+    int <- st_intersection(id1_hr_data, id2_hr_data)
+    
+    #only take data of hrs that intersect
+    if(nrow(int) > 0){
+      int <- st_intersection(id1_hr_data, id2_hr_data)
+      int_area <- as.numeric(st_area(geometry))
+      
+      #id data
+    id1 <- id1_hr_data$id_yr_seas
+    id2 <- id2_hr_data$id_yr_seas
+    hr1_area <- as.numeric(id1_hr_data$HR_area)
+    hr2_area <- as.numeric(id2_hr_data$HR_area)
+    spp1 <- id1_hr_data$species
+    spp2 <- id2_hr_data$species
+    season <- id1_hr_data$season
+    seas_yr <- id1_hr_data$seas_yr
+    
+    #combine variables
+    var <- data.frame(id1, id2, hr1_area, hr2_area, int_area, season, seas_yr,
+                 spp1, spp2, int$geometry)
+    
+    #add to data frame
+    hr_int_df <- rbind(var, hr_int_df)
+    }
+    
+  }
+  
+}
+
+stopCluster(clust)   #stop the parallelization framework
+
+#remove na from hr_int_df and set as sf object
+hr_int_df <- hr_int_df %>% 
+  filter(id1 != "NA") %>%
+  st_as_sf()
+  
+#save as rds
+saveRDS(hr_int_df, "./Code output/bufferHR_overlap_allspp_byseas_3.21.22.RDS")
+```
+
+#Summarize overlap
+
+```{r}
+#add overlap proportion per id1 and id2 (proportion different depending on id's hr area)
+hr_int_df <- hr_int_df %>%
+  mutate(int_area = as.numeric(int_area)) %>%
+  mutate(hr1_area = as.numeric(hr1_area)) %>% 
+  mutate(hr2_area = as.numeric(hr2_area)) %>% 
+  mutate(ol_prop1 = int_area/hr1_area) %>%
+  mutate(ol_prop2 = int_area/hr2_area) %>%
+  mutate(ol_type1 = paste(spp1, spp2, sep = "-")) %>% 
+  mutate(ol_type2 = paste(spp2, spp1, sep = "-"))
+
+
+#separate and stack overlap 1 and overlap 2
+ ol1_df <- hr_int_df %>% 
+   dplyr::select(c(id1, hr1_area, int_area, season, seas_yr, spp1,
+                                ol_prop1, ol_type1, geometry)) %>%
+   rename("species" = spp1, "id_yr_seas" = id1, "hr_area" = hr1_area,
+          "ol_prop" = ol_prop1, "ol_type" = ol_type1)
+ 
+ ol2_df <- hr_int_df %>% 
+   dplyr::select(c(id2, hr2_area, int_area, season, seas_yr, spp2,
+                                ol_prop2, ol_type2, geometry)) %>%
+   rename("species" = spp2, "id_yr_seas" = id2, "hr_area" = hr2_area,
+          "ol_prop" = ol_prop2, "ol_type" = ol_type2)
+ 
+ ol_df <- rbind(ol1_df, ol2_df)
+```
+
+```{r}
+library(scales)
+#graph mean and sd overlap proportion by overlap type
+avg_ol_summ <- ol_df %>%
+  group_by(ol_type) %>%
+  summarize(mean_prop_overlap = mean(ol_prop), 
+            sd_prop_overlap = sd(ol_prop),
+            se_prop_overlap = std.error(ol_prop), .groups = "keep")
+
+
+avg_ol_summ$geometry <- NULL
+
+
+#order from highest to lowest mean overlap
+avg_ol_summ <- avg_ol_summ %>%
+  arrange(mean_prop_overlap)
+
+#set overlap type as factor with levels in order of highest to lowest mean overlap
+ord <- avg_ol_summ$ol_type
+avg_ol_summ$ol_type <- factor(avg_ol_summ$ol_type, levels = ord)
+
+#graph
+av_ol_g <- ggplot(avg_ol_summ, aes(x = ol_type, y = mean_prop_overlap, 
+                        color = ol_type)) +
+  geom_errorbar(aes(ymin = (mean_prop_overlap - se_prop_overlap), 
+                    ymax = (mean_prop_overlap + se_prop_overlap)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  xlab("Overlap species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Home Range Overlap") +
+  theme(legend.position = "none")
+
+av_ol_g + ggpubr::rotate()
+```
+
+
+```{r}
+#graph mean and sd overlap proportion by overlap type and season
+avg_ol_summ_seas <- ol_df %>%
+  group_by(ol_type, season) %>%
+  summarize(mean_prop_overlap = mean(ol_prop), 
+            sd_prop_overlap = sd(ol_prop),
+            se_prop_overlap = std.error(ol_prop), .groups = "keep")
+
+
+avg_ol_summ_seas$geometry <- NULL
+avg_ol_summ_seas$season <- unlist(avg_ol_summ_seas$season)
+
+# order season
+avg_ol_summ_seas <- avg_ol_summ_seas %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+
+#graph
+av_ol_g <- ggplot(avg_ol_summ_seas, aes(x = ol_type, y = mean_prop_overlap, 
+                        color = ol_type)) +
+  geom_errorbar(aes(ymin = (mean_prop_overlap - se_prop_overlap), 
+                    ymax = (mean_prop_overlap + se_prop_overlap)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(rows = vars(season)) +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  xlab("Overlap species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Home Range Overlap") +
+  theme(legend.position = "none")
+
+av_ol_g + ggpubr::rotate()
+```
+
+```{r}
+#mean overlap proportion by interspecies vs. intraspecies overlap type
+ol_df <- ol_df %>%
+  mutate(ol_type_spp = if_else(sub("-.*", "", ol_type) == sub(".*-", "", ol_type),
+                               "intraspecies", "interspecies"))
+
+#graph mean and sd overlap proportion by overlap intra vs interspecies and species
+avg_ol_summ_spp <- ol_df %>%
+  group_by(ol_type_spp, species) %>%
+  summarize(mean_prop_overlap = mean(ol_prop), 
+            sd_prop_overlap = sd(ol_prop),
+            se_prop_overlap = std.error(ol_prop), .groups = "keep")
+
+
+avg_ol_summ_spp$geometry <- NULL
+
+
+
+#graph
+av_ol_spp_g <- ggplot(avg_ol_summ_spp, aes(x = species, y = mean_prop_overlap, 
+                        fill = ol_type_spp)) +
+   geom_bar(position = "dodge", stat = "identity", alpha = 0.5) +
+  geom_errorbar(aes(ymin = (mean_prop_overlap - se_prop_overlap), 
+                    ymax = (mean_prop_overlap + se_prop_overlap)), width=0.3,
+                  colour="black", position = position_dodge(1)) +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  xlab("Species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Home Range Overlap") +
+  labs(fill = "Overlap type")
+
+av_ol_spp_g + ggpubr::rotate()
+```
+
+```{r}
+#mean overlap proportion by interspecies vs. intraspecies overlap type by season 
+avg_ol_summ_spp_seas <- ol_df %>%
+  group_by(ol_type_spp, species, season) %>%
+  summarize(mean_prop_overlap = mean(ol_prop), 
+            sd_prop_overlap = sd(ol_prop),
+            se_prop_overlap = std.error(ol_prop), .groups = "keep")
+
+
+avg_ol_summ_spp_seas$geometry <- NULL
+avg_ol_summ_spp_seas$season <- unlist(avg_ol_summ_spp_seas$season)
+
+avg_ol_summ_spp_seas <- avg_ol_summ_spp_seas %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#graph
+av_ol_spp_g <- ggplot(avg_ol_summ_spp_seas, aes(x = species, y = mean_prop_overlap, 
+                        fill = ol_type_spp)) +
+   geom_bar(position = "dodge", stat = "identity", alpha = 0.5) +
+  geom_errorbar(aes(ymin = (mean_prop_overlap - se_prop_overlap),
+                    ymax = (mean_prop_overlap + se_prop_overlap)), width=0.3,
+                  colour="black", position = position_dodge(1)) +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  facet_grid(rows = vars(season)) +
+  xlab("Species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Home Range Overlap") +
+  labs(fill = "Overlap type")
+
+av_ol_spp_g + ggpubr::rotate()
+```

@@ -1,7 +1,7 @@
 ---
-title: "YNP ungulate RSFs Part B GIS Extraction"
+title: "YNP_ungulate_indiv_habitat per point"
 author: "Molly Caldwell"
-date: "3/16/2022"
+date: '2022-06-30'
 output: html_document
 ---
 
@@ -11,26 +11,33 @@ knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
 ```
 
 ```{r}
-#load packages
+#packages
 library(sf)
 library(raster)
 library(mapview)
 library(tidyverse)
 library(stringr)
 library(move)
-library(dummies)
+#library(dummies) #not available
 library(lme4)
 library(parallel)
 library(lubridate)
 ```
 
-#Load sampled RSFs environment
-From part A code
+#Load GPS Data
 
 ```{r}
-load("RSFs_AvailSampled.RData")
+#load seasonal GPS data with 2 hour fixes for all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
 
-data_list <- data_pop_spp_seas
+data <- st_as_sf(data)
+
+#add date only column
+data <- data %>%
+  mutate(date_only = format(date, format = "%Y-%m-%d"))
+
+#remove extra date column
+data$date2 <- NULL
 ```
 
 #Relate GIS to points
@@ -125,18 +132,18 @@ names(RAP_forbgrass_biomass) <- c("forb_grass_biomass_2016",
 
 
 ```{r}
-# extract GIS data to points by spp and season
+# extract topographic GIS data to all points
+data$elev <- raster::extract(elev, st_transform(data, crs=projection(elev)))
+data$trasp <- raster::extract(trasp, st_transform(data, crs=projection(trasp)))
+data$slope <- raster::extract(slope, st_transform(data, crs=projection(slope)))
+data$tpi <- raster::extract(tpi, st_transform(data, crs=projection(tpi)))
+```
 
-for(i in 1:length(data_list)){
-data_list[[i]]$elev <- raster::extract(elev, st_transform(data_list[[i]], crs=projection(elev)))
-data_list[[i]]$trasp <- raster::extract(trasp, st_transform(data_list[[i]], crs=projection(trasp)))
-data_list[[i]]$slope <- raster::extract(slope, st_transform(data_list[[i]], crs=projection(slope)))
-data_list[[i]]$tpi <- raster::extract(tpi, st_transform(data_list[[i]], crs=projection(tpi)))
-
-##extract rap data by yr
-yrs <- data_list[[i]]$yr
+```{r}
+##extract habitat rap data to all points by yr
+yrs <- data$yr
 unique_yrs <- unique(yrs)
-XYdata <- data_list[[i]]
+XYdata <- data
 
 # prepare parallel processing
   no_cores <- detectCores()-1
@@ -144,8 +151,10 @@ XYdata <- data_list[[i]]
   clust <- makeCluster(no_cores) 
   parallel::clusterExport(clust, envir=environment(),
                 varlist=c("yrs","XYdata","unique_yrs",
-                          "RAP_forbgrass_biomass"))
-  
+                          "RAP_forbgrass_biomass", "RAP_treecov_list",
+                          "RAP_shrubcov_list", "data"))
+
+#forb grass biomass  
   # start parallel loop
   vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
     require("raster")
@@ -158,20 +167,11 @@ XYdata <- data_list[[i]]
       # extract the rap data 
       return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
                                      crs = projection(r))))   
-    }))   # end of loop over unique yrs
-  stopCluster(clust)
-  
+    }))  
     # add column to original database
-    data_list[[i]]$forbgrass_biomass <- vals
+    data$forbgrass_biomass <- vals
   
-  # prepare parallel processing
-  no_cores <- detectCores()-1
-  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
-  clust <- makeCluster(no_cores) 
-  parallel::clusterExport(clust, envir=environment(),
-                varlist=c("yrs","XYdata","unique_yrs",
-                          "RAP_treecov_list"))
-  
+#tree cover
   # start parallel loop
   vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
     require("raster")
@@ -184,20 +184,11 @@ XYdata <- data_list[[i]]
       # extract the rap data 
       return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
                                      crs = projection(r))))   
-    }))   # end of loop over unique yrs
-  stopCluster(clust)
-  
+    }))  
    # add column to original database
-    data_list[[i]]$perc_treecov <- vals
+    data$perc_treecov <- vals
     
-    # prepare parallel processing
-  no_cores <- detectCores()-1
-  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
-  clust <- makeCluster(no_cores) 
-  parallel::clusterExport(clust, envir=environment(),
-                varlist=c("yrs","XYdata","unique_yrs",
-                          "RAP_shrubcov_list"))
-  
+#shrub cover
   # start parallel loop
   vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
     require("raster")
@@ -210,94 +201,105 @@ XYdata <- data_list[[i]]
       # extract the rap data 
       return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
                                      crs = projection(r))))   
-    }))   # end of loop over unique yrs
-  stopCluster(clust)
+    }))   
   
    # add column to original database
-    data_list[[i]]$perc_shrubcov <- vals
+    data$perc_shrubcov <- vals
   
-  }
-
-
-
-
-#extract rap data by year of gps dates
-# u_yrs <- unique(data_list[[i]]$yr)
-#   data_yr_list <- list()
-#   
-#   for(j in 1:length(u_yrs)){
-#     data_yr_list[[j]] <- data_list[[i]] %>% filter(yr == u_yrs[[j]])
-#    
-#      data_yr_list[[j]]$forbgrass_biomass <- raster::extract(RAP_forbgrass_biomass[[paste0("forb_grass_biomass_",
-#                                                   as.character(u_yrs[[j]]))]], 
-#                     st_transform(data_yr_list[[j]],
-#                   crs=projection(RAP_forbgrass_biomass[[paste0("forb_grass_biomass_",
-#                                                   as.character(u_yrs[[j]]))]])))
-#     
-#     data_yr_list[[j]]$perc_treecov <- raster::extract(RAP_treecov_list[[paste0(as.character(u_yrs[[j]])),
-#                                                               "_Cover_Trees"]], 
-#                     st_transform(data_yr_list[[j]],
-#                   crs=projection(RAP_forbgrass_biomass[[paste0(as.character(u_yrs[[j]])),
-#                                                               "_Cover_Trees"]])))
-#   }
-#   
-#   #bind together each yr dataset as one list element
-#   data_list[[i]] <- rlist::list.rbind(data_yr_list)
-
-
+  # end parallell processing
+  stopCluster(clust)
 ```
 
-
 ```{r}
-#extract snodas snow depth to winter data using Jerod's extract snodas function
-# spp <- c("bighorn", "bison", "elk", "deer", "pronghorn") #loop by spp
-# source("Z:/Snodas/code/extract.snodas.R")
-# 
-# for(i in 1:length(spp)){
-#   XYdata <- st_as_sf(data_list[[paste0(spp[[i]], ".winter")]], coords = c("x", "y"), crs = crs(data))
-#   
-#   XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "Z:/Snodas/snowdepth",
-#                  datesname = "date")
-#   
-#   data_list[[paste0(spp[[i]], ".winter")]]$snowdepth <- XYdata$Snodas_SnowDepth
-#   
-# }
-```
-
-
-```{r}
-#remove your rasters to clean up your environment
-rm(elev, trasp, slope, tpi)
-```
-
-#Prepare data for analysis
-
-```{r}
-#take databases out of sf format, and into a simple data frame.
-for(i in 1:length(data_list)){
+#extract snodas snow depth by point- 2016-7/2021 data
+source("Z:/Snodas/code/extract.snodas.R")
+  data_s1 <- data %>% filter(date_only < as.Date("2021-08-01"))
   
-data_list[[i]] <- data_list[[i]] %>%
+  XYdata <- st_as_sf(data_s1, coords = c("x", "y"), crs = crs(data))
+
+  XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "Z:/Snodas/snowdepth",
+                 datesname = "date")
+
+  data_s1$snowdepth <- XYdata$Snodas_SnowDepth
+  
+#extract snodas snow depth by point- 2016-7/2021 data
+  data_s2 <- data %>% filter(date_only >= as.Date("2021-08-01"))
+
+  XYdata <- st_as_sf(data_s2, coords = c("x", "y"), crs = crs(data))
+
+  XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "C:/Users/mcaldwe2/OneDrive - University of Wyoming/Documents/UWyo/PhD project/HOTR-proj/Data/GIS data/snodas_082021to122021_snowdepth/",
+                 datesname = "date")
+
+  data_s2$snowdepth <- XYdata$Snodas_SnowDepth
+  
+  
+data <- rbind(data_s1, data_s2)
+```
+
+```{r}
+  #extract snodas swe by point- 2016-9/2021 data
+source("Z:/Snodas/code/extract.snodas.R")
+  data_s1 <- data %>% filter(date_only < as.Date("2021-08-01"))
+  
+  XYdata <- st_as_sf(data_s1, coords = c("x", "y"), crs = crs(data))
+
+  XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "Z:/Snodas/swe",
+                 datesname = "date")
+
+  data_s1$swe <- XYdata$Snodas_SWE
+  
+#extract snodas snow depth by point- 2016-7/2021 data
+  data_s2 <- data %>% filter(date_only >= as.Date("2021-08-01"))
+
+  XYdata <- st_as_sf(data_s2, coords = c("x", "y"), crs = crs(data))
+
+  XYdata <- extract.snodas(XYdata = XYdata, SNODASfolder = "C:/Users/mcaldwe2/OneDrive - University of Wyoming/Documents/UWyo/PhD project/HOTR-proj/Data/GIS data/swe_9.21to12.21/",
+                 datesname = "date")
+
+  data_s2$swe <- XYdata$Snodas_SWE
+  
+  
+data <- rbind(data_s1, data_s2)
+
+```
+
+#NDVI/greenup metrics extract to point
+
+```{r}
+#take data out of sf format, and into a simple data frame.
+data <- data %>%
    mutate(x=st_coordinates(.)[,1],
          y=st_coordinates(.)[,2]) %>% 
   st_drop_geometry()
-}
-```
 
-#Save environment
+#load and run ndvi extract code
+##extract max IRG date, maxNDVIdate, csumNDVImax, fittedVals (NDVI), IRGVals in loop
+source("Z:/MODIS_NDVI/info/ndviEXTRACT.R")
+
+ext_vars <- c("fittedVals", "IRGVals", "maxNDVIdate", "maxIRGdate", 
+              "csumNDVImax")
+
+for(i in 1:length(ext_vars)){
+data$ne <- ndviEXTRACT(XYdata = data, NDVImetric = ext_vars[i],
+                  NDVIfolder="Z:/MODIS_NDVI/Bischof_calculations/",
+                        maxcpus=4, xname="x", yname="y", datesname="date", 
+                  scaleIRG=TRUE,
+                  xyCRS = CRS("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0"))
+
+#rename column
+names(data)[names(data) == "ne"] <- ext_vars[i]
+}
+
+#rename fittedvals to NDVIVals
+data <- data %>%
+  rename("NDVIVals" = fittedVals)
+```
 
 ```{r}
-# now that you've extracted your GIS data, write out your environment! ####
-# save your environment so we can load it back up another time 
-save.image("RSFs_VariablesExtracted.RData")
+#convert data back to sf
+data <- st_as_sf(data, coords = c("x", "y"))
+
+#save data
+saveRDS(data, "./Code output/individual_habitat_metrics/allindiv_gpspts_habextract.rds")
 ```
-
-
-
-
-
-
-
-
-
-
 

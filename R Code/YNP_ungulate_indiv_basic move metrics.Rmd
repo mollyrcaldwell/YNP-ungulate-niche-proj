@@ -1,0 +1,305 @@
+---
+title: "YNP Ungulate Individual Basic Move Metrics: daily, weekly, monthly, seasonally, annually"
+author: "Molly Caldwell"
+date: "6/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(adehabitatLT)
+library(adehabitatHR)
+library(parallel)
+library(circular)
+library(sf)
+library(lubridate)
+library(moveHMM)
+library(purrr)
+library(dplyr)
+```
+
+```{r}
+#load all species cleaned GPS collar data with move parameters (with season variables, elk and pronghorn subsampled to 2 hr, and individuals with missing seasonal data removed)
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+
+#add date only column
+data_all <- data_all %>%
+  mutate(date_only = format(date, format = "%Y-%m-%d"))
+
+#remove extra date column
+data_all$date2 <- NULL
+```
+
+#Daily basic move metrics
+Average and standard deviation of speed, turn angle, and step length. Daily total distance and displacement (max distance between gps points) by individual.
+
+```{r}
+#avg and sd of speed and step length, sum step length, displacement
+indiv_movemet_day <- data_all %>%
+  group_by(id_yr_seas, date_only, species, season, yr) %>% #added in extra grouping columns for additional variables I want to keep
+  summarize(avg_speed = mean(speed, na.rm = T), sd_speed = sd(speed, na.rm = T), 
+            avg_steplength = mean(dist, na.rm = T), 
+            sd_steplength = sd(dist, na.rm = T), 
+            tot_dist = sum(dist, na.rm = T),
+            max_displ = as.numeric(max(st_distance(t))), .groups = "keep")
+         
+   
+```
+
+```{r}
+#loop avg and sd of turn angle by day and id_yr_seas b/c NAs throwing errors in summarize
+ang_summ <- data.frame(id_yr_seas = "NA", date_only = "NA", mu_turnang = "NA",
+                       rho_turnang = "NA")
+
+u_id <- unique(data_all$id_yr_seas)
+
+#run loop in parallel
+#identify 1 less cores than you have
+no_cores <- detectCores()-1
+#setup cluster
+clust <- makeCluster(no_cores)
+#export needed objects to nodes' environments
+clusterExport(clust, varlist = c("ang_summ", "u_id", "data_all"))
+
+for(i in 1:length(u_id)){
+  print(paste0("i: ", i))
+  data_id <- data_all %>% filter(id_yr_seas == u_id[i])
+  u_date <- unique(data_id$date_only)
+  
+  for(j in 1:length(u_date)){
+    data_dt <- data_id %>% filter(date_only == u_date[j])
+    
+    if(sum(!is.na(data_dt$rel.ang)) > 1){
+      mu_turnang <- as.numeric(mle.wrappedcauchy(data_dt$rel.angle)$mu)
+      rho_turnang <- as.numeric(mle.wrappedcauchy(data_dt$rel.angle)$rho)
+      id_yr_seas <- data_dt$id_yr_seas[[1]]
+      date_only <- data_dt$date_only[[1]]
+      
+      df <- cbind(id_yr_seas, date_only, mu_turnang, rho_turnang)
+      ang_summ <- rbind(df, ang_summ)
+    }
+  }
+}
+
+#stop parallelization framework
+stopCluster(clust)
+
+```
+
+```{r}
+#combine turn angle and move metric daily summaries
+indiv_movemet_day <- left_join(indiv_movemet_day, ang_summ, 
+                               by = c("id_yr_seas", "date_only"))
+
+#remove na column
+indiv_movemet_day <- indiv_movemet_day %>% filter(id_yr_seas != "NA")
+
+#save as csv
+write.csv(indiv_movemet_day, 
+      "./Code output/individual_move_metrics/indiv_day_move_metrics_6_22.csv")
+```
+
+
+#Weekly (5 days) basic move metrics
+Average and standard deviation of speed, turn angle, and step length. Weekly total distance and displacement (max distance between gps points) by individual.
+
+```{r}
+#create 5-day grouping variable per id_yr_seas
+data_all <- data_all %>% group_by(id_yr_seas) %>%
+  mutate(week = cut(as.Date(date), breaks = "5 days", include.lowest = T))
+  
+```
+
+
+```{r}
+#avg and sd of speed and step length, sum step length, displacement
+indiv_movemet_wk <- data_all %>%
+  group_by(id_yr_seas, week, species, season, yr) %>% #added in extra grouping columns for additional variables I want to keep
+  summarize(avg_speed = mean(speed, na.rm = T), sd_speed = sd(speed, na.rm = T), 
+            avg_steplength = mean(dist, na.rm = T), 
+            sd_steplength = sd(dist, na.rm = T), 
+            tot_dist = sum(dist, na.rm = T),
+            max_displ = as.numeric(max(st_distance(geometry))), .groups = "keep")
+
+indiv_movemet_wk$geometry <- NULL
+         
+```
+
+```{r}
+#loop avg and sd of turn angle b/c NAs throwing errors in summarize
+ang_summ_wk <- data.frame(id_yr_seas = "NA", week = "NA", mu_turnang = "NA",
+                       rho_turnang = "NA")
+
+u_id <- unique(data_all$id_yr_seas)
+
+#run loop in parallel
+#identify 1 less cores than you have
+no_cores <- detectCores()-1
+#setup cluster
+clust <- makeCluster(no_cores)
+#export needed objects to nodes' environments
+clusterExport(clust, varlist = c("ang_summ_wk", "u_id", "data_all"))
+
+for(i in 1:length(u_id)){
+  print(paste0("i: ", i))
+  data_id <- data_all %>% filter(id_yr_seas == u_id[i])
+  u_wk <- unique(data_id$week)
+  
+  for(j in 1:length(u_wk)){
+    data_dt <- data_id %>% filter(week == u_wk[j])
+    
+    if(sum(!is.na(data_dt$rel.angle)) > 1){
+      mu_turnang <- as.numeric(mle.wrappedcauchy(data_dt$rel.angle)$mu)
+      rho_turnang <- as.numeric(mle.wrappedcauchy(data_dt$rel.angle)$rho)
+      id_yr_seas <- data_dt$id_yr_seas[[1]]
+      week <- as.character(data_dt$week[[1]])
+      
+      df <- cbind(id_yr_seas, week, mu_turnang, rho_turnang)
+      ang_summ_wk <- rbind(df, ang_summ_wk)
+    }
+  }
+}
+
+#stop parallelization framework
+stopCluster(clust)
+
+```
+
+```{r}
+#combine turn angle and move metric daily summaries
+indiv_movemet_wk <- left_join(indiv_movemet_wk, ang_summ_wk, 
+                               by = c("id_yr_seas", "week"))
+
+
+#save as csv
+write.csv(indiv_movemet_wk, 
+      "./Code output/individual_move_metrics/indiv_week_move_metrics_6_22.csv")
+```
+
+#Monthly basic move metrics
+Average and standard deviation of speed, turn angle, and step length. Total distance and displacement (max distance between gps points) by individual.
+
+```{r}
+#create month grouping variable per id_yr_seas
+data_all <- data_all %>% group_by(id_yr_seas) %>%
+  mutate(month = cut(as.Date(date), breaks = "1 month", include.lowest = T))
+  
+```
+
+```{r}
+#avg and sd of speed and step length, sum step length, displacement
+indiv_movemet_month <- data_all %>%
+  group_by(id_yr_seas, month, species, season, yr) %>% #added in extra grouping columns for additional variables I want to keep
+  summarize(avg_speed = mean(speed, na.rm = T), sd_speed = sd(speed, na.rm = T), 
+            avg_steplength = mean(dist, na.rm = T), 
+            sd_steplength = sd(dist, na.rm = T), 
+            tot_dist = sum(dist, na.rm = T),
+            max_displ = as.numeric(max(st_distance(geometry))), .groups = "keep")
+         
+indiv_movemet_month$geometry <- NULL
+```
+
+```{r}
+#loop avg and sd of turn angle b/c NAs throwing errors in summarize
+ang_summ_month <- data.frame(id_yr_seas = "NA", month = "NA", mu_turnang = "NA",
+                       rho_turnang = "NA")
+
+u_id <- unique(data_all$id_yr_seas)
+
+#run loop in parallel
+#identify 1 less cores than you have
+no_cores <- detectCores()-1
+#setup cluster
+clust <- makeCluster(no_cores)
+#export needed objects to nodes' environments
+clusterExport(clust, varlist = c("ang_summ_month", "u_id", "data_all"))
+
+for(i in 1:length(u_id)){
+  print(paste0("i: ", i))
+  data_id <- data_all %>% filter(id_yr_seas == u_id[i])
+  u_month <- unique(data_id$month)
+  
+  for(j in 1:length(u_month)){
+    data_dt <- data_id %>% filter(month == u_month[j])
+    
+    if(sum(!is.na(data_dt$rel.angle)) > 1){
+      mu_turnang <- as.numeric(mle.wrappedcauchy(data_dt$rel.angle)$mu)
+      rho_turnang <- as.numeric(mle.wrappedcauchy(data_dt$rel.angle)$rho)
+      id_yr_seas <- data_dt$id_yr_seas[[1]]
+      month <- as.character(data_dt$month[[1]])
+      
+      df <- cbind(id_yr_seas, month, mu_turnang, rho_turnang)
+      ang_summ_month <- rbind(df, ang_summ_month)
+    }
+  }
+}
+
+#stop parallelization framework
+stopCluster(clust)
+
+```
+
+```{r}
+#combine turn angle and move metric daily summaries
+indiv_movemet_month <- left_join(indiv_movemet_month, ang_summ_month, 
+                               by = c("id_yr_seas", "month"))
+
+
+#save as csv
+write.csv(indiv_movemet_month, 
+      "./Code output/individual_move_metrics/indiv_month_move_metrics_6_22.csv")
+```
+
+
+#Seasonal basic move metrics
+Average and standard deviation of speed, turn angle, and step length. Total distance and displacement (max distance between gps points) by individual.
+
+
+```{r}
+#avg and sd of speed and step length, sum step length, displacement
+indiv_movemet_seas <- data_all %>%
+  group_by(id_yr_seas, species, season, yr) %>% #added in extra grouping columns for additional variables I want to keep
+  summarize(avg_speed = mean(speed, na.rm = T), sd_speed = sd(speed, na.rm = T), 
+            avg_steplength = mean(dist, na.rm = T), 
+            sd_steplength = sd(dist, na.rm = T), 
+            tot_dist = sum(dist, na.rm = T),
+            mu_turnang = as.numeric(mle.wrappedcauchy(rel.angle)$mu),
+            rho_turnang = as.numeric(mle.wrappedcauchy(rel.angle)$rho),
+            max_displ = as.numeric(max(st_distance(geometry))), .groups = "keep")
+
+indiv_movemet_seas$geometry <- NULL
+
+#save as csv
+write.csv(indiv_movemet_seas, 
+      "./Code output/individual_move_metrics/indiv_seas_move_metrics_6_22.csv")
+```
+
+#Annual basic move metrics
+Average and standard deviation of speed, turn angle, and step length. Total distance and displacement (max distance between gps points) by individual.
+
+
+```{r}
+#avg and sd of speed and step length, sum step length, displacement
+indiv_movemet_ann <- data_all %>%
+  group_by(cid, species, yr) %>% #added in extra grouping columns for additional variables I want to keep
+  summarize(avg_speed = mean(speed, na.rm = T), sd_speed = sd(speed, na.rm = T), 
+            avg_steplength = mean(dist, na.rm = T), 
+            sd_steplength = sd(dist, na.rm = T), 
+            tot_dist = sum(dist, na.rm = T),
+            mu_turnang = as.numeric(mle.wrappedcauchy(rel.angle)$mu),
+            rho_turnang = as.numeric(mle.wrappedcauchy(rel.angle)$rho),
+            max_displ = as.numeric(max(st_distance(geometry))), .groups = "keep")
+  
+indiv_movemet_ann$geometry <- NULL     
+
+#save as csv
+write.csv(indiv_movemet_ann, 
+      "./Code output/individual_move_metrics/indiv_annual_move_metrics_6_22.csv")
+```
+
+

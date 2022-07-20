@@ -139,13 +139,15 @@ r <- stack("Z:/MODIS_NDVI/Bischof_calculations/dlcparams.grd")
 
 ```{r}
 #download snow depth for August-December 2021 (not on GIS drive)
+##***Need to fix- now getting error from download_SNODAS
 # source("Z:/Snodas/code/apiToDF.R")
 # source("Z:/Snodas/code/download_SNODAS.R")
 # download_SNODAS(params = "SnowDepth", startDate = "2021-08-01", endDate = "2021-12-31",
 #                 outDir = "~/UWyo/PhD project/HOTR-proj/Data/GIS data/")
 
 #stack snodas snow depth layers for recently downloaded files
-lf <- list.files("~/UWyo/PhD project/HOTR-proj/Data/GIS data/", pattern = glob2rx("SNODAS_2021*SnowDepth*"), full.names = TRUE)
+lf <- list.files("~/UWyo/PhD project/HOTR-proj/Data/GIS data/", pattern = glob2rx("SNODAS_2021*SnowDepth*"), full.names = T)
+
 name_vec2 <- c(list.files("~/UWyo/PhD project/HOTR-proj/Data/GIS data/", pattern = glob2rx("SNODAS_2021*SnowDepth*")))
 
 stk_n <- stack(lf)
@@ -214,6 +216,10 @@ names(stk) <- c(name_vec, name_vec2)
 #save snodas snowdepth 2016-2021
 writeRaster(stk,  "./Code output/SNODAS_snowdepth_2016to2021_stack", bylayer = T, overwrite = T)
 
+#load study area snodas snowdepth 2016-2021
+fn <- list.files("./Code output/", pattern = glob2rx("SNODAS_snowdepth_2016to2021_stack*.gri"), full.names = T)
+stk <- stack(fn)
+
 #snow off julian date raster (subset raster stack by each year of data)
 SnowOff_jul <- raster()
 
@@ -226,7 +232,10 @@ for(i in 1:length(yrs)){
 
 names(SnowOff_jul) <- yrs
 
-stackSave(SnowOff_jul, "./Code output/Season Rasters/snowOFF_julday.stk")
+#convert from stack to brick with 6 layers for better saving/processing
+snowOff_brick <- brick(SnowOff_jul, n1 = 6)
+
+saveRDS(snowOff_brick, "./Code output/Season Rasters/snowOFF_julday.rds")
 
 #snow on julian date raster
 SnowOn_jul <- raster()
@@ -240,7 +249,10 @@ for(i in 1:length(yrs)){
 
 names(SnowOn_jul) <- yrs
 
-stackSave(SnowOn_jul, "./Code output/Season Rasters/snowON_julday.stk")
+#convert from stack to brick with 6 layers for better saving/processing
+snowOn_brick <- brick(SnowOn_jul, n1 = 6)
+
+saveRDS(snowOn_brick, "./Code output/Season Rasters/snowON_julday.rds")
 
 ```
 
@@ -255,8 +267,9 @@ The season start/end for the study area per year were calculated as the date whe
 
 ```{r}
 #load rasters
-snowOn <- stackOpen("./Code output/Season Rasters/snowON_julday.stk")
-snowOff <- stackOpen("./Code output/Season Rasters/snowOFF_julday.stk")
+
+snowOn <- readRDS("./Code output/Season Rasters/snowON_julday.rds")
+snowOff <- readRDS("./Code output/Season Rasters/snowOFF_julday.rds")
 meanPeakNDVI <- readRDS("./Code output/Season Rasters/meanPeakNDVI_julday.rds")
 meanPeakBD <- readRDS("./Code output/Season Rasters/meanPeakBrownDown_julday.rds")
 ```

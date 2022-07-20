@@ -1,0 +1,159 @@
+---
+title: "YNP ungulates niche overlap: summary stats"
+author: "Molly Caldwell"
+date: "6/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+```
+
+```{r}
+#load overlap data
+ol_disp <- readRDS("./Code output/niche_densities/indiv_day_disp_ol_spring_samp10.Rds")
+ol_temp <- readRDS("./Code output/niche_densities/indiv_dayactperiod_ol_spring_samp10.Rds")
+```
+
+```{r}
+#prep data
+ol_disp <- ol_disp[["OV"]]
+ol_disp <- as.data.frame(ol_disp)
+ol_disp <- rownames_to_column(ol_disp, "row_names")
+
+ol_temp <- ol_temp[["OV"]]
+ol_temp <- as.data.frame(ol_temp)
+ol_temp <- rownames_to_column(ol_temp, "row_names")
+
+#join data- can't join right away because ol_temp row names are switched order
+#ol_comb <- left_join(ol_disp, ol_temp, by = "row_names")
+
+```
+
+
+```{r}
+#assign ids to separate columns, and switch naming for ol_temp (row names opp order)
+ol_disp <- ol_disp %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") 
+
+ol_temp <- ol_temp %>%
+  separate(row_names, into= c("id2", "id1"), sep= "-") 
+
+#join data
+ol_comb <- left_join(ol_disp, ol_temp, by = c("id1", "id2"))
+
+#add species variables
+ol_comb <- ol_comb %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2),"elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+```
+
+```{r}
+#mean and sd of overlap values per species group
+ol_summ <- ol_comb %>%
+  group_by(spp_comb) %>%
+  summarize(mean_displacement = mean(ol_disp), sd_displacement = sd(ol_disp),
+            mean_temporal_act = mean(ol_temp), sd_temporal_act = sd(ol_temp),
+            .groups = "keep")
+
+#put data in long format for plotting
+ol_mean_long <- ol_summ %>%
+  select(spp_comb, starts_with("mean")) %>%
+  pivot_longer(cols = -spp_comb, 
+               names_prefix = "mean_",
+               values_to = "mean",
+               names_to = "overlap_var")
+
+ol_sd_long <- ol_summ %>%
+  select(spp_comb, starts_with("sd")) %>%
+  pivot_longer(cols = -spp_comb, 
+               names_prefix = "sd_",
+               values_to = "sd",
+               names_to = "overlap_var")
+
+ol_summ_long <- left_join(ol_mean_long, ol_sd_long, by = c("spp_comb", "overlap_var"))
+  
+```
+
+```{r}
+#create habitat overlap summ (all vars)
+ol_hab_long <- read.csv("./Code output/niche_densities/individ_overlap_habitat_longform.csv")[-1]
+
+ol_hab_summ <- ol_hab_long %>%
+  group_by(spp_comb, habitat_var) %>%
+  summarize(mean = mean(overlap_prop), sd = sd(overlap_prop), .groups = "keep") %>%
+  rename("overlap_var" = habitat_var) %>%
+  mutate(overlap_var = sub("^ol_", "", overlap_var))
+
+
+#create habitat overlap summ (avg of all vars)
+ol_hab_avg <- read.csv("./Code output/niche_densities/indiv_overlap_habitat vars_wide_spring_samp10.csv")
+ol_hab_avg <- ol_hab_avg %>%
+  select(spp_comb, hab_avg_ol)
+
+ol_hab_summ <- ol_hab_avg %>%
+  group_by(spp_comb) %>%
+  summarize(mean = mean(hab_avg_ol), sd = sd(hab_avg_ol)) %>%
+  mutate(overlap_var = "habitat") %>%
+  group_by(spp_comb) %>%
+  mutate(spp1 = str_split(spp_comb, "-")[[1]][2]) %>%
+  mutate(spp2 = str_split(spp_comb, "-")[[1]][1]) %>%
+  mutate(spp_comb = paste(spp1, spp2, sep = "-")) %>%
+  select(-spp1, -spp2)
+
+  ##add to summary with temporal activity and daily displacement
+  ol_summ_long <- rbind(ol_summ_long, ol_hab_summ)
+
+```
+
+
+```{r}
+library(ggpubr)
+#plot means and sds
+pd <- position_dodge(width = 0.8)
+
+ggplot(data = ol_summ_long) +
+  geom_point(aes(x = spp_comb, y = mean, color = overlap_var),
+             position = pd) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd, x = spp_comb, 
+                    color = overlap_var),
+             position = pd) +
+  labs(title = "Individual niche overlaps") + 
+  rotate()
+
+ggplot(data = ol_hab_summ) +
+  geom_point(aes(x = spp_comb, y = mean, color = overlap_var),
+             position = pd) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd, x = spp_comb, 
+                    color = overlap_var),
+             position = pd) +
+  rotate()
+```
+
+
+```{r}
+#rearrange to look at max and min 
+ol_summ_long <- ol_summ_long %>%
+  arrange(spp_comb)
+```
+
+
+
+
+
+

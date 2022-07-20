@@ -1,0 +1,603 @@
+---
+title: "YNP ungulates niche variation"
+author: "Molly Caldwell"
+date: "5/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+library(ggridges)
+library(Ostats)
+library(parallel)
+library(raster)
+library(sf)
+library(data.table)
+```
+
+#individual overlap- daily displacement (spring)
+
+```{r}
+#load data
+indiv_day_disp <- read.csv("./Code output/Species move metrics/maxdaydisp_indiv_byseas_copy.csv")[,c(2:7)]
+
+```
+
+```{r}
+#ridgeline density plots- spring
+ggplot(indiv_day_disp %>% filter(season == "spring")) + 
+  geom_density_ridges(aes(x = max_disp_day_km, y = species, group = interaction(species,id_yr_seas),fill = species), scale = 1.5, alpha = 0.4) +
+  theme(legend.position = "none") +
+  xlim(c(0, 20)) +
+  labs(title = "Individual daily displacement (spring)", y = "Species", x = "Daily displacement (km)")
+```
+
+```{r}
+#create list of indiv day disp by season
+seas_disp_list <- split(indiv_day_disp,
+                  f = list(indiv_day_disp$season))
+
+# indiv_disp_list <- list()
+# 
+# # identify cores (use 1 less than you have)
+# no_cores <- detectCores()-1
+# # Setup cluster
+# clust <- makeCluster(no_cores) 
+# # export the objects you need for your calculations from your environment to each node's environment
+# clusterExport(clust, varlist=c("spp_disp_list", "indiv_disp_list"))
+# 
+# for(i in 1:length(spp_disp_list)){
+#   spp_data <- spp_disp_list[[i]] %>% select(c(id_yr_seas, max_disp_day_km))
+#   
+#   indiv_disp_list[[i]] <- split(spp_data, 
+#                                 f = spp_data$id_yr_seas)
+# 
+# }
+# 
+# indiv_disp_num <- list()
+# for(j in 1:length(indiv_disp_list)){
+# indiv_disp_ss <- sapply(indiv_disp_list[[j]], "[", c(2))
+# indiv_disp_num[[j]] <- indiv_disp_ss
+# }
+# 
+# names(indiv_disp_num) <- names(spp_disp_list)
+# 
+# #pairwise individual density overlap by spp and season
+# indiv_day_disp_ol <- list()
+# 
+# for(i in 1:length(indiv_disp_num)){
+#   print(paste0("i: ", i))
+# indiv_day_disp_ol[[i]] <- (indiv_disp_num[[i]])
+# }
+
+#sample 10 individuals per spp from spring data
+samp <- list()
+spp <- unique(seas_disp_list[[2]]$species)
+
+for(i in 1:length(spp)){
+  data_spp <- seas_disp_list[[2]] %>% filter(species == spp[i])
+  ids <- sample(unique(data_spp$id_yr_seas), 10)
+  samp <- rbind(samp, data_spp %>% filter(id_yr_seas %in% ids))}
+
+samp <- samp %>% select(id_yr_seas, max_disp_day_km)
+setDT(samp) 
+samp <- split(samp, by="id_yr_seas", keep=FALSE)
+
+sampt <- map(samp, as.matrix)
+
+ot <- overlapping::overlap(sampt)
+
+saveRDS(ot, file = "./Code output/niche_densities/indiv_day_disp_ol.Rds")
+
+ovl <- ot[["OV"]]
+
+ovl <- as.data.frame(ovl)
+
+```
+
+```{r}
+#assign ids to separate columns and create species variable
+ovl_day_disp <- rownames_to_column(ovl, "row_names")
+
+ovl_day_disp <- ovl_day_disp %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+
+
+```
+
+
+```{r}
+#plot overlap values
+ggplot(data = ovl_day_disp, aes(x = spp_comb, y = ovl, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: daily displacement", x = "Species",
+       y = "Proportion overlap")
+```
+
+#individual overlap- daily temporal activity (movement rate)
+
+```{r}
+#load data
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+
+```
+
+```{r}
+#prep data
+#change speed from km/hr to m/hr and remove unecessary columns
+data_mr <- data_all %>%
+  mutate(speed_mhr = speed*1000) %>%
+  dplyr::select(c(date, season, cid, id_yr_seas, species,
+           speed, speed_mhr))
+
+#add hour variable
+data_mr <- data_mr %>% 
+  mutate(date = as.POSIXct(strptime(date, format = "%Y-%m-%d %H:%M:%S"))) %>%
+  mutate(hour = hour(date))
+
+data_mr <- as.data.frame(data_mr)
+```
+
+```{r}
+#categorize points as active (1) or inactive (0) based on speed
+spp <- unique(data_mr$species)
+#hist speed dist
+for(i in 1:length(spp)){
+  d <- as.data.frame(data_mr) %>% dplyr::filter(species == spp[i])
+  print(hist(d$speed_mhr, main = spp[i], xlim = c(0, 100), breaks = 100))
+}
+
+#set speeds > 50 meter/hour as active (1)
+data_mr <- data_mr %>%
+  mutate(active = if_else(speed_mhr > 50, 1, 0))
+
+#filter data to only active points
+data_act <- data_mr %>% filter(active == 1)
+```
+
+```{r}
+#ridgeline density plots- spring
+ggplot(data_act %>% filter(season == "spring")) + 
+  geom_density_ridges(aes(x = hour, y = species, group = interaction(species,id_yr_seas),fill = species), scale = 1.5, alpha = 0.4) +
+  theme(legend.position = "none") +
+  xlim(c(0, 23)) +
+  labs(title = "Individual daily active periods (spring)", y = "Species", x = "Hours of day")
+
+```
+
+
+```{r}
+#create list of daily active points by season
+seas_act_list <- split(data_act,
+                  f = list(data_act$season))
+
+#sample 10 individuals per spp from spring data (same sample as indiv disp)
+samp_act <- seas_act_list[[2]] %>% filter(id_yr_seas %in% names(samp))
+
+samp_act <- samp_act %>% select(id_yr_seas, hour)
+
+setDT(samp_act) 
+
+samp_act <- split(samp_act, by="id_yr_seas", keep=FALSE)
+
+samp_act_mt <- map(samp_act, as.matrix)
+
+ovl_act_raw <- overlapping::overlap(samp_act_mt)
+
+saveRDS(ovl_act_raw, file = "./Code output/niche_densities/indiv_dayactperiod_ol_spring_samp10.Rds")
+
+ovl_act <- ovl_act_raw[["OV"]]
+
+ovl_act <- as.data.frame(ovl_act)
+
+```
+
+```{r}
+#assign ids to separate columns and create species variable
+ovl_act <- rownames_to_column(ovl_act, "row_names")
+
+ovl_act <- ovl_act %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+
+
+```
+
+
+```{r}
+#plot overlap values
+ggplot(data = ovl_act, aes(x = spp_comb, y = ovl_act, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: daily active periods", x = "Species",
+       y = "Proportion overlap")
+```
+
+#individual overlap- habitat/topo variables (extracted by point)
+
+```{r}
+#load data
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+```
+
+```{r}
+#filter to spring and same sampled individuals as day disp (10 per species)
+data_samp <-  data_all[which(data_all$id_yr_seas %in% names(samp)), ]
+```
+
+```{r}
+#bring in all your GIS data
+elev <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Elevation_meters_30m_gye.tif")
+#trasp <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Aspect_TRASP_30m_gye.tif")
+slope <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/Slope_degrees_30m_gye.tif")
+#tpi <- raster("~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/TPI_unitless_30m_gye.tif")
+#RAP data (forbs grass biomass and %cover by land cover type per year)
+RAP_ann_biomass_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Biomass*AnnualForbsGrasses*"),
+                        full.names = TRUE)
+RAP_per_biomass_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Biomass*PerennialForbsGrasses*"),
+                        full.names = TRUE)
+RAP_treecov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Cover_Trees*"),
+                        full.names = TRUE)
+RAP_shrubcov_file_list <- list.files(path = "~/UWyo/PhD project/HOTR-proj/Data/GIS_data_clean/", 
+                        pattern = glob2rx("*Cover_Shrubs*"),
+                        full.names = TRUE)
+
+RAP_ann_biomass_list <- list()
+for(i in 1:length(RAP_ann_biomass_file_list)){
+  print(i)
+RAP_ann_biomass_list[[i]] <- raster(RAP_ann_biomass_file_list[[i]])
+}
+RAP_ann_biomass_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_ann_biomass_file_list)
+RAP_ann_biomass_names <- sub("*.tif", "", RAP_ann_biomass_names)
+names(RAP_ann_biomass_list) <- RAP_ann_biomass_names
+
+RAP_per_biomass_list <- list()
+for(i in 1:length(RAP_per_biomass_file_list)){
+  print(i)
+RAP_per_biomass_list[[i]] <- raster(RAP_per_biomass_file_list[[i]])
+}
+RAP_per_biomass_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_per_biomass_file_list)
+RAP_per_biomass_names <- sub("*.tif", "", RAP_per_biomass_names)
+names(RAP_per_biomass_list) <- RAP_per_biomass_names
+
+RAP_treecov_list <- list()
+for(i in 1:length(RAP_treecov_file_list)){
+  print(i)
+RAP_treecov_list[[i]] <- raster(RAP_treecov_file_list[[i]])
+}
+RAP_treecov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_treecov_file_list)
+RAP_treecov_names <- sub("*.tif", "", RAP_treecov_names)
+names(RAP_treecov_list) <- RAP_treecov_names
+
+RAP_shrubcov_list <- list()
+for(i in 1:length(RAP_shrubcov_file_list)){
+  print(i)
+RAP_shrubcov_list[[i]] <- raster(RAP_shrubcov_file_list[[i]])
+}
+RAP_shrubcov_names <- sub(".*RAP_gye_30m_reproj_", "", RAP_shrubcov_file_list)
+RAP_shrubcov_names <- sub("*.tif", "", RAP_shrubcov_names)
+names(RAP_shrubcov_list) <- RAP_shrubcov_names
+```
+
+```{r}
+#add together perennial and annual grass and forb biomass rasters by year
+RAP_forbgrass_biomass <- list()
+for(i in 1:length(RAP_per_biomass_list)){
+  print(paste0("i: ", i))
+  
+  biomass_stack <- stack(RAP_ann_biomass_list[[i]], RAP_per_biomass_list[[i]])
+  ann_per_biomass <-  calc(biomass_stack, sum)
+  
+  RAP_forbgrass_biomass[[i]] <- ann_per_biomass
+}
+names(RAP_forbgrass_biomass) <- c("forb_grass_biomass_2016", 
+                                  "forb_grass_biomass_2017",
+                                  "forb_grass_biomass_2018",
+                                  "forb_grass_biomass_2019",
+                                  "forb_grass_biomass_2020",
+                                  "forb_grass_biomass_2021")
+```
+
+
+```{r}
+# extract GIS data to points
+data_samp$elev <- raster::extract(elev, st_transform(data_samp, crs=projection(elev)))
+#data_samp$trasp <- raster::extract(trasp, st_transform(data_samp, crs=projection(trasp)))
+data_samp$slope <- raster::extract(slope, st_transform(data_samp, crs=projection(slope)))
+#data_samp$tpi <- raster::extract(tpi, st_transform(data_samp, crs=projection(tpi)))
+##extract rap data by yr
+yrs <- data_samp$yr
+unique_yrs <- unique(yrs)
+XYdata <- data_samp
+# prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_forbgrass_biomass"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_forbgrass_biomass[[paste0("forb_grass_biomass_",
+                                                  as.character(unique_yrs[[j]]))]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r))))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+    # add column to original database
+    data_samp$forbgrass_biomass <- vals
+  
+  # prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_treecov_list"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_treecov_list[[paste0(as.character(unique_yrs[[j]]),
+                                            "_Cover_Trees")]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r))))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+   # add column to original database
+    data_samp$perc_treecov <- vals
+    
+    # prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("yrs","XYdata","unique_yrs",
+                          "RAP_shrubcov_list"))
+  
+  # start parallel loop
+  vals <- do.call(c, clusterApplyLB(clust, 1:length(unique_yrs), function(j){
+    require("raster")
+    require("sf")
+      
+      #grab raster matching year of data
+      r <- RAP_shrubcov_list[[paste0(as.character(unique_yrs[[j]]),
+                                            "_Cover_Shrubs")]]
+    
+      # extract the rap data 
+      return(extract(r, st_transform(XYdata[XYdata$yr == unique_yrs[j],], 
+                                     crs = projection(r))))   
+    }))   # end of loop over unique yrs
+  stopCluster(clust)
+  
+   # add column to original database
+    data_samp$perc_shrubcov <- vals
+```
+
+
+```{r}
+#ridgeline density plots- spring
+#remove unecessary columns
+data_samp$geometry <- NULL
+data_samp <- data_samp %>% select(c(species, id_yr_seas, elev, slope, 
+                                    forbgrass_biomass, perc_treecov,
+                                    perc_shrubcov))
+
+#combine habitat/topographic variables to on column for plotting
+data_samp_melt <-  melt(data_samp, id=c("id_yr_seas", "species"))
+
+#rename variables
+data_samp_melt <- data_samp_melt %>%
+  mutate(variable = if_else(variable == "elev", "Elevation (m)",
+                    if_else(variable == "slope", "Slope (deg.)",
+                    if_else(variable == "forbgrass_biomass", "Forbs and grasses biomass (lbs/acre)",
+                    if_else(variable == "perc_treecov", "Percent tree cover",
+                    if_else(variable == "perc_shrubcov", "Percent shrub cover", "NA")))))) %>%
+  mutate(species = if_else(species == "bighorn", "Bighorn",
+                   if_else(species == "bison", "Bison",
+                   if_else(species == "pronghorn", "Pronghorn",
+                   if_else(species == "elk", "Elk",
+                   if_else(species == "deer", "Mule deer", "NA"))))))
+  
+data_samp_melt$variable <- factor(data_samp_melt$variable, levels = c("Elevation (m)",
+                        "Slope (deg.)", "Forbs and grasses biomass (lbs/acre)", 
+                        "Percent tree cover", "Percent shrub cover"))
+
+#plot
+ggplot(data_samp_melt, aes(x = value, y = species, 
+                group = interaction(species, id_yr_seas), fill = species, 
+                scale = 1.5, alpha = 0.4)) +
+  geom_density_ridges() +
+  #scale_fill_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
+  facet_wrap(~variable, scales = "free", nrow = 5) + 
+  theme(legend.position = "none") +
+  xlab("Value per individual locations") +
+  ylab("Species") +
+  labs(title = "Individual habitat use (spring)")
+  theme(text = element_text(size = 20))
+```
+
+#Overlap habitat densities by variable
+
+```{r}
+#loop densities overlap by each topographic/veg variable
+
+vars <- names(data_samp)[3:7]
+# prepare parallel processing
+  no_cores <- detectCores()-1
+  print(paste0("Initiating parallel processing on ", no_cores, " cores."))
+  clust <- makeCluster(no_cores) 
+  parallel::clusterExport(clust, envir=environment(),
+                varlist=c("data_samp", "vars"))
+  
+# start parallel loop
+for(i in 1:length(vars)){
+  print(paste0("i: ", i))
+  
+  samp_hab <- data_samp %>% select(id_yr_seas, vars[i])
+
+  setDT(samp_hab) 
+  
+  samp_hab <- split(samp_hab, by="id_yr_seas", keep=FALSE)
+  
+  samp_hab_mt <- map(samp_hab, as.matrix)
+  
+  ovl_hab_raw <- overlapping::overlap(samp_hab_mt, nbins = as.numeric(50))
+  
+  saveRDS(ovl_hab_raw, file = paste0("~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/niche_densities/indiv_habitat_ol_",
+                                     vars[i], "_spring_samp10.Rds"))
+            
+}
+
+stopCluster(clust)
+
+```
+
+```{r}
+#load and prep overlap habitat data
+ol_elev <- readRDS("./Code output/niche_densities/indiv_habitat_ol_elev_spring_samp10.Rds")
+ol_slope <- readRDS("./Code output/niche_densities/indiv_habitat_ol_slope_spring_samp10.Rds")
+ol_forbgrass <- readRDS("./Code output/niche_densities/indiv_habitat_ol_forbgrass_biomass_spring_samp10.Rds")
+ol_treecov <- readRDS("./Code output/niche_densities/indiv_habitat_ol_perc_treecov_spring_samp10.Rds")
+ol_shrubcov <- readRDS("./Code output/niche_densities/indiv_habitat_ol_perc_shrubcov_spring_samp10.Rds")
+
+ol_elev <- ol_elev[["OV"]]
+ol_elev <- as.data.frame(ol_elev)
+ol_elev <- rownames_to_column(ol_elev, "row_names")
+
+ol_slope <- ol_slope[["OV"]]
+ol_slope <- as.data.frame(ol_slope)
+ol_slope <- rownames_to_column(ol_slope, "row_names")
+
+ol_forbgrass <- ol_forbgrass[["OV"]]
+ol_forbgrass <- as.data.frame(ol_forbgrass)
+ol_forbgrass <- rownames_to_column(ol_forbgrass, "row_names")
+
+ol_treecov <- ol_treecov[["OV"]]
+ol_treecov <- as.data.frame(ol_treecov)
+ol_treecov <- rownames_to_column(ol_treecov, "row_names")
+
+ol_shrubcov <- ol_shrubcov[["OV"]]
+ol_shrubcov <- as.data.frame(ol_shrubcov)
+ol_shrubcov <- rownames_to_column(ol_shrubcov, "row_names")
+
+#join overlap vars
+ol_hab_join <- plyr::join_all(list(ol_elev, ol_slope, ol_forbgrass, ol_treecov, ol_shrubcov),
+                   by = "row_names", type = 'left')
+
+
+```
+
+
+```{r}
+#create species variable
+ol_hab <- ol_hab_join %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+
+
+```
+
+
+```{r}
+#create long data format for plotting
+ol_hab_long <- ol_hab %>%
+  select(-c(id1, id2, spp1, spp2)) %>%
+  pivot_longer(cols = -spp_comb, names_to = 'habitat_var',
+               values_to = 'overlap_prop')
+
+#plot overlap values
+ggplot(data = ol_hab_long, aes(x = spp_comb, y = overlap_prop, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: habitat use", x = "Species",
+       y = "Proportion overlap") +
+  facet_wrap(~habitat_var, scales = "free", nrow = 5)
+
+#save long data for summary code
+write.csv(ol_hab_long, "./Code output/niche_densities/individ_overlap_habitat_longform.csv")
+```
+
+```{r}
+#average habitat overlap
+#take average of each pair of individual's overlap for all habitat variables
+ol_hab <- ol_hab %>%
+  group_by(id1, id2) %>%
+  mutate(hab_avg_ol = sum(ol_elev, ol_slope,ol_forbgrass, ol_treecov, ol_shrubcov)/5)
+
+#save as csv
+write.csv(ol_hab, "./Code output/niche_densities/indiv_overlap_habitat vars_wide_spring_samp10.csv")
+
+#plot overlap values
+ggplot(data = ol_hab, aes(x = spp_comb, y = hab_avg_ol, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: habitat use (all habitat variables)", x = "Species",
+       y = "Proportion overlap") 
+```
+
+
+

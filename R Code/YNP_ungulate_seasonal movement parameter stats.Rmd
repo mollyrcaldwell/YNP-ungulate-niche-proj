@@ -1,0 +1,595 @@
+---
+title: "YNP Ungulate Seasonal Movement Parameter Stats"
+author: "Molly Caldwell"
+date: "3/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(adehabitatLT)
+library(adehabitatHR)
+library(parallel)
+library(circular)
+library(sf)
+library(lubridate)
+library(moveHMM)
+library(purrr)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(ggpubr)
+```
+
+```{r}
+#load all species cleaned GPS collar data with move parameters (with season variables, elk and pronghorn subsampled to 2 hr, and individuals with missing seasonal data removed)
+data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+
+#add date only column
+data_all <- data_all %>%
+  mutate(date_only = format(date, format = "%Y-%m-%d"))
+```
+
+#Step length and turn angle
+
+```{r, error=FALSE}
+#list vector of species names
+spp <- unique(data_all$species)
+
+#data frame for combining summary stats
+df_summ_stats <- data.frame(species = "NA", season = "NA", mean_speed = "NA",
+                            sd_speed = "NA", mu = "NA", rho = "NA")
+
+#list data by season
+data_seas <- split(data_all, data_all$season)
+
+#empty list to save species/season data
+move_data_list <- list()
+
+#Movement parameter graphs and summary data looped by season and species
+for(i in 1:length(data_seas)){
+
+  #select data from each season
+data <- data_seas[[i]]
+
+data <- data[order(data$id_yr_seas, data$date),] #order database first
+
+#create season variable
+season_select <- data$season[[i]]
+
+#create data list by species to loop functions
+data_list <- split(data, data$species)
+
+
+
+  for(j in 1:length(data_list)){
+  
+  #write histograms of turn angle and step length to pngs
+  # png(paste0("./Movement Parameters_Random Walks/Graphs/speed and turn angle 2021/", 
+  #            spp[[j]], "_", data_list[[j]]$season[[i]], "_", 
+  #            "turn_angle_hist", ".png"), width = 350, height = 350)
+  # hist(data_list[[j]]$rel.angle, main = paste(spp[j], "turn angle", 
+  #                                             season_select, sep = " "), 
+  #      xlab = "turn angle (deg)")#this is your turning angle distribution
+  # dev.off()
+  # 
+  # png(paste0("./Movement Parameters_Random Walks/Graphs/speed and turn angle 2021/", 
+  #            spp[j], "_", data_list[[j]]$season[[i]], "_", 
+  #            "speed_hist", ".png"), width = 350, height = 350)
+  # hist((data_list[[j]]$speed), main = paste(spp[j], "speed", 
+  #                                                     season_select, sep = " "), 
+  #      xlab = "speed (km/hr)")   #this is your speed distribution
+  # dev.off()
+  
+  #create list of mean and sd speed (km/hr) per species
+  mean_Sp <- mean((data_list[[j]]$speed), na.rm = TRUE)
+  sd_Sp <- sd((data_list[[j]]$speed), na.rm = TRUE)
+  
+  
+  #create a list of mu and rho turn angle per species
+  mu_rho_angle <- mle.wrappedcauchy(data_list[[j]]$rel.angle)
+  
+  #create data frame of combined movement parameter summaries
+  new_df <- data.frame(species = spp[j], season = data_list[[j]]$season[[i]], 
+                       mean_speed = mean_Sp, sd_speed = sd_Sp,
+                       mu = mu_rho_angle$mu, rho = mu_rho_angle$rho)
+  
+  df_summ_stats <- rbind(df_summ_stats, new_df)
+  
+  }
+move_data_list[[i]] <- data_list
+}
+
+
+#remove first "NA" row of summary stats data frame
+df_summ_stats <- df_summ_stats %>% filter(species != "NA")
+```
+
+```{r}
+#graph summary stats of speed per species and season
+df_summ_stats <- df_summ_stats %>%
+  mutate(mean_speed = as.numeric(mean_speed)) %>%
+  mutate(sd_speed = as.numeric(sd_speed)) %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+ps <- ggplot(df_summ_stats, aes(x = species, y = mean_speed, color = species)) +
+  geom_errorbar(aes(ymin = max((mean_speed - sd_speed), 0), ymax = (mean_speed + sd_speed)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,0.2), oob = rescale_none) +
+  facet_grid(cols = vars(season)) +
+  xlab("Species") +
+  ylab("Mean Speed (km/hr)") +
+  ggtitle("Average speed") +
+  theme(legend.position = "none") 
+
+ ps + ggpubr::rotate()
+ 
+ #save csv
+ write.csv(df_summ_stats, 
+           "./Code output/Species move metrics/spp_speed_turnangle_byseas.csv")
+```
+
+```{r}
+#graph summary stats of turn angle per species and season
+df_summ_stats <- df_summ_stats %>%
+  mutate(mu = as.numeric(mu)) %>%
+  mutate(rho = as.numeric(rho)) %>%
+  mutate(mu_deg = mu * (180/pi)) %>%
+  mutate(rho_deg = rho * (180/pi)) %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+pt <- ggplot(df_summ_stats, aes(x = species, y = mu_deg, color = species)) +
+  geom_errorbar(aes(ymin = (mu_deg - rho_deg), ymax = (mu_deg + rho_deg)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(cols = vars(season)) +
+  xlab("Species") +
+  ylab("mu turn angle (degrees)") +
+  ggtitle("mu turn angle (+/- rho) by species and season") +
+  theme(legend.position = "none")
+
+pt + ggpubr::rotate()
+ 
+```
+
+##Daily distance traveled (sum of step lengths per day)
+
+```{r}
+#add total daily distance to movement data list
+for(i in 1:length(move_data_list)){
+  
+  for(j in 1:length(move_data_list[[i]])){
+    move_data_list[[i]][[j]] <- move_data_list[[i]][[j]] %>%
+      group_by(id_yr_seas, date_only) %>%
+      mutate(day_dist = sum(dist, na.rm = TRUE)) #sum step distance per day to get daily distance (in meters)
+    
+  }
+  
+}
+```
+
+```{r}
+#create summary data of mean and sd daily distance by individual and season
+#data frame for combining summary stats
+summ_day_dist_indiv <- data.frame(id_yr_seas = "NA", species = "NA", season = "NA", 
+                                  mean_day_dist = "NA", sd_day_dist = "NA")
+
+#calculate mean and sd daily distance looped by cid and season
+for(i in 1:length(move_data_list)){
+  for(j in 1:length(move_data_list[[i]])){
+    
+    summ_dist <- move_data_list[[i]][[j]] %>%
+      group_by(id_yr_seas) %>%
+      summarise(mean_day_dist = mean(day_dist), 
+                sd_day_dist = sd(day_dist))
+    
+    species <- move_data_list[[i]][[j]]$species[1:nrow(summ_dist)]
+    season <- move_data_list[[i]][[j]]$season[1:nrow(summ_dist)]
+    
+    all_var_df <- cbind(summ_dist, species, season)
+    all_var_df$geometry <- NULL
+    
+  #add data to summary df
+    summ_day_dist_indiv <- rbind(all_var_df, summ_day_dist_indiv)
+    
+  }
+  
+}
+
+#remove "NA" row of summary data frame
+summ_day_dist_indiv <- summ_day_dist_indiv %>% filter(species != "NA")
+
+```
+
+```{r}
+#graph mean and sd daily distance by individual and season (convert distance to km)
+summ_day_dist_indiv <- summ_day_dist_indiv %>%
+  mutate(mean_day_dist = as.numeric(mean_day_dist)/1000) %>%
+  mutate(sd_day_dist = as.numeric(sd_day_dist)/1000) %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save csv
+write.csv(summ_day_dist_indiv, 
+          "./Code output/Species move metrics/indiv_dailydist_byseas.csv")
+
+ggplot(summ_day_dist_indiv, aes(x = id_yr_seas, y = mean_day_dist, color = species)) +
+  geom_errorbar(aes(ymin = (mean_day_dist - sd_day_dist), 
+                    ymax = (mean_day_dist + sd_day_dist)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(rows = vars(season)) +
+  xlab("Collar ID") +
+  ylab("Mean daily distance (km)") +
+  ggtitle("Mean daily distance (km) by ID and season") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+```{r}
+#create summary data of mean and sd daily distance by species and season
+#data frame for combining summary stats
+summ_day_dist_spp <- data.frame(species = "NA", season = "NA", 
+                                  mean_day_dist = "NA", sd_day_dist = "NA")
+
+#calculate mean and sd daily distance looped by cid and season
+for(i in 1:length(move_data_list)){
+  for(j in 1:length(move_data_list[[i]])){
+    
+    summ_dist <- move_data_list[[i]][[j]] %>%
+      ungroup() %>%
+      summarise(mean_day_dist = mean(day_dist), 
+                sd_day_dist = sd(day_dist))
+    
+    species <- move_data_list[[i]][[j]]$species[1:nrow(summ_dist)]
+    season <- move_data_list[[i]][[j]]$season[1:nrow(summ_dist)]
+    
+    all_var_df <- cbind(summ_dist, species, season)
+    all_var_df$geometry <- NULL
+    
+  #add data to summary df
+    summ_day_dist_spp <- rbind(all_var_df, summ_day_dist_spp)
+    
+  }
+  
+}
+
+#remove "NA" row of summary data frame
+summ_day_dist_spp <- summ_day_dist_spp %>% filter(species != "NA")
+```
+
+```{r}
+#graph mean and sd daily distance by species and season (convert daily dist to km)
+summ_day_dist_spp <- summ_day_dist_spp %>%
+  mutate(mean_day_dist = as.numeric(mean_day_dist)/1000) %>%
+  mutate(sd_day_dist = as.numeric(sd_day_dist)/1000) %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save csv
+write.csv(summ_day_dist_spp, 
+          "./Code output/Species move metrics/spp_dailydist_byseas.csv")
+
+pdd <- ggplot(summ_day_dist_spp, aes(x = species, y = mean_day_dist, color = species)) +
+  geom_errorbar(aes(ymin = (mean_day_dist - sd_day_dist), 
+                     ymax = (mean_day_dist + sd_day_dist)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,8), oob = rescale_none) +
+  facet_grid(rows = vars(season)) +
+  xlab("Species") +
+  ylab("Mean daily distance (km)") +
+  ggtitle("Mean daily distance") +
+  theme(legend.position = "none")
+  
+  pdd + ggpubr::rotate()
+```
+
+##Seasonal distance (sum of daily distance per individual by season)
+
+```{r}
+#create summary data of mean and sd seasonal distance by individual and season
+#data frame for combining summary stats
+summ_seas_dist_indiv <- data.frame(id_yr_seas = "NA", species = "NA", season = "NA",
+                                   seas_dist = "NA")
+
+#calculate seasonal distance looped by cid and season
+for(i in 1:length(move_data_list)){
+  for(j in 1:length(move_data_list[[i]])){
+    
+    summ_dist <- move_data_list[[i]][[j]] %>%
+      group_by(id_yr_seas) %>%
+      summarise(seas_dist = sum(day_dist))
+    
+    species <- move_data_list[[i]][[j]]$species[1:nrow(summ_dist)]
+    season <- move_data_list[[i]][[j]]$season[1:nrow(summ_dist)]
+    
+    all_var_df <- cbind(summ_dist, species, season)
+    all_var_df$geometry <- NULL
+    
+  #add data to summary df
+    summ_seas_dist_indiv <- rbind(all_var_df, summ_seas_dist_indiv)
+    
+  }
+  
+}
+
+#remove "NA" row of summary data frame
+summ_seas_dist_indiv <- summ_seas_dist_indiv %>% filter(species != "NA")
+
+#summarize by species
+summ_seas_dist_spp <- summ_seas_dist_indiv %>%
+  mutate(seas_dist = as.numeric(seas_dist)/1000) %>% #convert to km
+  group_by(species, season) %>%
+  summarize(mean_seas_dist = mean(seas_dist), sd_seas_dist = sd(seas_dist),
+            .groups = "keep") %>%
+    mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save csv
+write.csv(summ_seas_dist_spp, 
+          "./Code output/Species move metrics/meanseas_dist_spp_byseas.csv")
+```
+
+```{r}
+#graph mean and sd seasonal distance by species and season 
+psd <- ggplot(summ_seas_dist_spp, aes(x = species, y = mean_seas_dist, color = species)) +
+  geom_errorbar(aes(ymin = (mean_seas_dist - sd_seas_dist), 
+                     ymax = (mean_seas_dist + sd_seas_dist)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,6000), oob = rescale_none) +
+  facet_grid(rows = vars(season)) +
+  xlab("Species") +
+  ylab("Mean seasonal distance (km)") +
+  ggtitle("Mean seasonal distance") +
+  theme(legend.position = "none")
+  
+  psd + ggpubr::rotate()
+  
+
+```
+
+```{r}
+#graph of only spring for tws wy poster 2022
+  summ_seas_dist_spring <- summ_seas_dist_spp %>%
+  filter(season == "spring") %>%
+  mutate(species = if_else(species == "bighorn", "Bighorn",
+                   if_else(species == "bison", "Bison",
+                   if_else(species == "pronghorn", "Pronghorn",
+                   if_else(species == "elk", "Elk",
+                   if_else(species == "deer", "Mule deer", "NA"))))))
+
+psd <- ggplot(summ_seas_dist_spring, aes(x = species, y = mean_seas_dist, color = species)) +
+  geom_errorbar(aes(ymin = (mean_seas_dist - sd_seas_dist), 
+                     ymax = (mean_seas_dist + sd_seas_dist)),
+                width = 0.2, size = 2) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
+  scale_y_continuous(limits = c(0,6000), oob = rescale_none) +
+  xlab("") +
+  ylab("Mean distance traveled (km)") +
+  theme(legend.position = "none") +
+  theme(text = element_text(size = 20))
+  
+  psd + ggpubr::rotate()
+```
+
+
+#Maximum daily displacement
+Defined as maximum distance between any two points during the same day by CID
+
+```{r}
+##create data frame to store max daily distance info per individual per season
+max_day_disp_indiv <- data.frame(id_yr_seas = "NA", species = "NA", season = "NA",
+                                date = "NA", max_disp_day = "NA")
+
+##setup cluster to run on multiple cores
+#set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("max_day_disp_indiv", "move_data_list"))
+
+
+##loop by species, season, individual, and day - takes a few hrs
+  for(i in 1:length(move_data_list)){
+    print(i)
+    for(j in 1:length(move_data_list[[i]])){
+      u_cid <- unique(move_data_list[[i]][[j]]$id_yr_seas) #pull list of unique id_yr_seas
+      
+      for(k in 1:length(u_cid)){
+        print(u_cid[[k]])
+        dt <- move_data_list[[i]][[j]]
+        dt_cid <- dt %>% filter(id_yr_seas == u_cid[[k]]) #create df of each cid
+        
+        
+        u_day <- unique(dt_cid$date_only)
+        
+        for(l in 1:length(u_day)){
+          dt_day <- dt_cid %>% filter(date_only == u_day[[l]]) #create df of each day
+          
+        #calculate distance between every point each day
+        dist_mt <- st_distance(dt_day, dt_day)
+        
+        #extract max distance
+        max_disp_seas <- max(dist_mt)
+        
+        #extract cid, season, species for data frame
+        id_yr_seas <- u_cid[[k]]
+        species <- move_data_list[[i]][[j]]$species[[1]]
+        season <- move_data_list[[i]][[j]]$season[[1]]
+        date <- u_day[[l]]
+        
+        #add to existing data frame
+        df_md <- cbind(id_yr_seas, species, season, date, max_disp_seas)
+        df_md$geometry <- NULL
+        
+        max_day_disp_indiv <- rbind(df_md, max_day_disp_indiv)
+        
+        }
+      }
+    }
+  }
+
+stopCluster(clust)   #stop the parallelization framework
+
+#remove "NA" row of summary data frame
+max_day_disp_indiv <- max_day_disp_indiv %>% filter(species != "NA")
+```
+
+
+```{r}
+#graph max daily displacement by cid and season (convert dist to km)
+max_day_disp_indiv <- max_day_disp_indiv %>%
+  mutate(max_disp_day = as.numeric(max_disp_day)) %>%
+  mutate(max_disp_day_km = as.numeric(max_disp_day/1000)) 
+
+#summarize by mean and sd daily displacement by cid and season
+summ_day_disp_indiv <- max_day_disp_indiv %>%
+  group_by(id_yr_seas, season, species) %>%
+  summarize(mean_disp = mean(max_disp_day_km), sd_disp = sd(max_disp_day_km),
+            .groups = "keep") %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save csv
+write.csv(summ_day_disp_indiv, "./Code output/Species move metrics/avgdaydisp_indiv_byseas.csv")
+
+#graph
+ggplot(summ_day_disp_indiv, aes(x = id_yr_seas, y = mean_disp, color = species)) +
+  geom_errorbar(aes(ymin = (mean_disp - sd_disp), 
+                    ymax = (mean_disp + sd_disp)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(rows = vars(season)) +
+  xlab("Collar ID") +
+  ylab("Mean daily displacement (km)") +
+  ggtitle("Mean daily displacement (+/- stand. dev.) by collar ID and season") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+```{r}
+#graph max daily displacement by species and season (convert dist to km)
+
+#summarize by mean and sd daily displacement by species and season
+summ_day_disp_spp <- max_day_disp_indiv %>%
+  group_by(species, season) %>%
+  summarize(mean_disp = mean(max_disp_day_km), sd_disp = sd(max_disp_day_km),
+            .groups = "keep") %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save csv
+write.csv(summ_day_disp_spp, "./Code output/Species move metrics/spp_daydispavg_byseas.csv")
+
+#graphp
+pdd <- ggplot(summ_day_disp_spp, aes(x = species, y = mean_disp, color = species)) +
+  geom_errorbar(aes(ymin = (mean_disp - sd_disp), 
+                    ymax = (mean_disp + sd_disp)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(rows = vars(season)) +
+  xlab("Species") +
+  ylab("Mean daily displacement (km)") +
+  ggtitle("Mean daily displacement") +
+  theme(legend.position = "none") 
+
+pdd + ggpubr::rotate()
+```
+
+
+#Maximum seasonal displacement
+Defined as maximum distance between any two points by species during same season
+
+```{r}
+##create data frame to store max displacement per individual by season
+max_disp_id_seas <- data.frame(id_yr_seas = "NA", species = "NA", season = "NA",
+                                max_disp_seas = "NA")
+
+##loop by species, individual, and season 
+  for(i in 1:length(move_data_list)){
+    
+    for(j in 1:length(move_data_list[[i]])){
+      u_id_yr_seas <- unique(move_data_list[[i]][[j]]$id_yr_seas) #pull list of unique id_yr_seass
+      
+      for(k in 1:length(u_id_yr_seas)){
+        dt <- move_data_list[[i]][[j]]
+        dt_id_yr_seas <- dt %>% filter(id_yr_seas == u_id_yr_seas[[k]]) #create df of each id_yr_seas
+        
+        #calculate distance between every point
+        dist_mt <- st_distance(dt_id_yr_seas, dt_id_yr_seas)
+        
+        #extract max distance
+        max_disp_seas <- max(dist_mt)
+        
+        #extract id_yr_seas, season, species for data frame
+        id_yr_seas <- u_id_yr_seas[[k]]
+        species <- move_data_list[[i]][[j]]$species[[1]]
+        season <- move_data_list[[i]][[j]]$season[[1]]
+        
+        #add to existing data frame
+        df_md <- cbind(id_yr_seas, species, season, max_disp_seas)
+        df_md$geometry <- NULL
+        
+        max_disp_id_seas <- rbind(df_md, max_disp_id_seas)
+      }
+    }
+  }
+
+#remove "NA" row of summary data frame
+max_disp_id_seas <- max_disp_id_seas %>% filter(species != "NA")
+```
+
+
+```{r}
+#graph max displacement by cid and season (convert dist to km)
+max_disp_id_seas <- max_disp_id_seas %>%
+  mutate(max_disp_seas = as.numeric(max_disp_seas)) %>%
+  mutate(max_disp_seas_km = as.numeric(max_disp_seas/1000)) %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save as csv
+write.csv(max_disp_id_seas, "./Code output/Species move metrics/indiv_disp_byseas.csv")
+
+ggplot(max_disp_cid_seas, aes(x = cid, y = max_disp_seas_km, fill = species)) +
+  geom_col() +
+  facet_grid(rows = vars(season)) +
+  xlab("Collar ID") +
+  ylab("Maximum displacement distance (km)") +
+  ggtitle("Maximum displacement by CID and season") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+
+```{r}
+#graph max displacement by species and season (convert dist to km)
+max_disp_spp_seas <- max_disp_id_seas %>% 
+  group_by(species, season) %>%
+  summarize(mean_disp = mean(max_disp_seas_km), sd_disp = sd(max_disp_seas_km),
+            .groups = "keep") %>%
+  mutate(season = factor(season, levels = c("summer", "fall", "winter", "spring")))
+
+#save csv
+write.csv(max_disp_spp_seas, "./Code output/Species move metrics/spp_avgseasdisp_byseas.csv")
+
+pmds <- ggplot(max_disp_spp_seas, aes(x = species, y = mean_disp, color = species)) +
+  geom_errorbar(aes(ymin = (mean_disp - sd_disp), 
+                    ymax = (mean_disp + sd_disp)),
+                width = 0.2) +
+  geom_point() +
+  facet_grid(rows = vars(season)) +
+  xlab("Species") +
+  ylab("Mean displacement (km)") +
+  ggtitle("Mean seasonal displacement") +
+  theme(legend.position = "none")
+
+pmds + ggpubr::rotate()
+```
+
+```{r}
+save.image("./YNP_ungulates_moveparams.RData")
+```
+

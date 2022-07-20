@@ -1,0 +1,179 @@
+---
+title: "YNP Ungulate Network Connections & Variation in Seasonal Displacement"
+author: "Molly Caldwell"
+date: "4/25/22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+```
+
+#Prep data
+
+```{r}
+#load network connection summary by individual
+net_conn_summ <- read.csv("./Code output/allspp_alldata_1hrnetcon_byindiv_4.25.22.csv")
+  
+  ##rename columns and get rid of row number column
+  net_conn_summ <- net_conn_summ %>%
+    rename("cid" = source, "conspp_conn" = same_spp, "interspp_conn" = diff_spp) %>%
+    mutate(total_conn = conspp_conn + interspp_conn)
+  
+  net_conn_summ$X <- NULL
+
+#load seasonal displacement summary by individual
+disp_summ <- read.csv("./Code output/seas_disp_allindiv_4.25.22.csv")
+
+  ##create cid column (only have id-yr-seas) for displacement data
+  disp_summ <- disp_summ %>%
+    mutate(cid = str_replace(id_yr_seas, "\\_.*", ""))
+```
+
+```{r}
+#join net conn and seasonal displacement by cid
+var_data <- left_join(disp_summ, net_conn_summ, by = "cid")
+
+#remove NAs in connections (no connections)
+var_data_f <- var_data %>%
+  filter(!is.na(total_conn)) #only dropped 4 observations
+```
+
+#connection summary 
+
+```{r}
+#summary of # connections by species
+
+summ_conn <- var_data_f %>%
+  group_by(species) %>%
+  summarize(tot_diff_spp_conn = sum(interspp_conn), tot_same_spp_conn = sum(conspp_conn))
+
+summ_conn
+```
+
+
+#Graphs
+
+```{r}
+#total connections vs. displacement, summer
+var_data_summer <- var_data_f %>% filter(season == "summer")
+
+ggplot(var_data_summer, aes(x = total_conn, y = max_dist_seas_km, color = species)) +
+  geom_point() +
+  xlab("Total number of interactions") +
+  ylab("Maximum displacement distance (km)")
+```
+
+
+
+```{r}
+#total connections vs. displacement, summer, faceted by spp
+
+ggplot(var_data_summer, aes(x = total_conn, y = max_dist_seas_km, color = species)) +
+  geom_point() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Total number of interactions") +
+  ylab("Maximum displacement distance (km)")
+```
+
+#Categorize number of interactions into bins based on medians
+
+```{r}
+var_data_summer_bin <- var_data_summer %>%
+  group_by(species) %>%
+  mutate(conn_level = if_else(total_conn < as.numeric(quantile(total_conn, 
+                                             probs = 0.33)), "low",
+                        if_else(total_conn > as.numeric(quantile(total_conn, 
+                                             probs = 0.66)), "high", "med")))
+
+var_data_summer_bin$conn_level <- factor(var_data_summer_bin$conn_level,
+                                         levels = c("low", "med", "high"))
+```
+
+```{r}
+#graph
+ggplot(var_data_summer_bin, aes(x = conn_level, y = max_dist_seas_km, 
+                                fill = species)) +
+  geom_boxplot() +
+  geom_jitter() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Level of interactions") +
+  ylab("Maximum displacement distance (km)")
+```
+
+
+#variation as measure of distance from population mean
+
+```{r}
+var_data_summer_bin_pop <- var_data_summer_bin %>%
+  group_by(species) %>%
+  mutate(pop_mean_dist = mean(max_dist_seas_km)) %>%
+  mutate(indiv_var = abs(max_dist_seas_km - pop_mean_dist))
+```
+
+```{r}
+#total connections vs. displacement diff from pop mean, summer, faceted by spp
+#graph
+ggplot(var_data_summer_bin_pop, aes(x = conn_level, y = indiv_var, 
+                                fill = species)) +
+  geom_boxplot() +
+  geom_jitter() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Level of interactions") +
+  ylab("Individual difference from pop. mean displacement")
+```
+
+
+#bins by total of all spp, not per spp
+
+#Categorize number of interactions into bins based on medians
+
+```{r}
+var_data_summer_bin <- var_data_summer %>%
+  ungroup() %>%
+  mutate(conn_level = if_else(total_conn < as.numeric(quantile(total_conn, 
+                                             probs = 0.33)), "low",
+                        if_else(total_conn > as.numeric(quantile(total_conn, 
+                                             probs = 0.66)), "high", "med")))
+
+var_data_summer_bin$conn_level <- factor(var_data_summer_bin$conn_level,
+                                         levels = c("low", "med", "high"))
+```
+
+```{r}
+#graph
+ggplot(var_data_summer_bin, aes(x = conn_level, y = max_dist_seas_km)) +
+  geom_boxplot() +
+  geom_jitter(aes(color = species)) +
+  xlab("Level of interactions") +
+  ylab("Maximum displacement distance (km)")
+```
+
+
+#variation as measure of distance from population mean
+
+```{r}
+var_data_summer_bin_pop <- var_data_summer_bin %>%
+  group_by(species) %>%
+  mutate(pop_mean_dist = mean(max_dist_seas_km)) %>%
+  mutate(indiv_var = abs(max_dist_seas_km - pop_mean_dist))
+```
+
+```{r}
+#total connections vs. displacement diff from pop mean, summer, faceted by spp
+#graph
+ggplot(var_data_summer_bin_pop, aes(x = conn_level, y = indiv_var)) +
+  geom_boxplot() +
+  geom_jitter() +
+  xlab("Level of interactions") +
+  ylab("Individual difference from pop. mean displacement")
+```
+
+
+

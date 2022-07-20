@@ -24,7 +24,7 @@ setwd("~/UWyo/PhD project/YNP-ungulate-niche-proj/")
 # Load SSF data with variables extracted  ####
 #--------------------------------------------#
 # from lab RSF part b
-load("SSFs_VariablesExtracted.RData")
+load("SSFs_state space_VariablesExtracted.RData")
 head(data)
 
 #---------------------------------------#
@@ -38,14 +38,8 @@ hist(data$dist)
 
 data$elev_target <- data$elev_target/1000   # get into KM
 
-data$elev_step <- data$elev_step/1000   # get into KM
-
 data$rank_forbgrassbiomass_target <- (data$forbgrass_biomass_target/max(data$forbgrass_biomass_target))
 data$rank_perctreecov_target <- data$perc_treecov_target/100
-data$rank_forbgrassbiomass_step <- lapply(data$forbgrass_biomass_step, function(value) value/max(unlist(data$forbgrass_biomass_step)))
-data$rank_perctreecov_step <- lapply(data$perc_treecov_step, function(value) value/100)
-data$rank_csumNDVImax_target <- data$csumNDVImax_target/max(data$csumNDVImax_target, na.rm = T)
-data$rank_IRGVals_target <- data$IRGVals_target/max(data$IRGVals_target, na.rm = T)
 
 # # ---------------------------------------#
 # # some work on the landcover variable ####
@@ -98,8 +92,7 @@ data$rank_IRGVals_target <- data$IRGVals_target/max(data$IRGVals_target, na.rm =
 #--------------------------------------#
 #start by checking correlation
 vars_target <- c("elev_target","trasp_target","slope_target","tpi_target",   # for the target point variables
-               "rank_perctreecov_target", "rank_forbgrassbiomass_target",
-               "rank_IRGVals_target", "rank_csumNDVImax_target")
+               "rank_perctreecov_target", "rank_forbgrassbiomass_target")
 correl <- data %>% 
   dplyr::select(all_of(vars_target)) %>% 
   cor(use="pairwise.complete.obs", method="pearson") %>% 
@@ -121,14 +114,9 @@ ifelse(abs(correl)>.5, correl, NA)  # a cleaner way to look at it
 # I cannot have PerennialForbGrass_step and treecov_step in same model. I'll go with PerennialForbGrass_step
 
 # update variable objects less the ones you deemed too correlated with others
-vars_target <- c("elev_target","trasp_target","slope_target",   # for the target point variables
-                 "rank_perctreecov_target", "rank_forbgrassbiomass_target",
-                 "rank_IRGVals_target", "rank_csumNDVImax_target")
-vars_step <- c(  "elev_step","trasp_step","slope_step",   # for the step variables
-                 "rank_perctreecov_step", "rank_forbgrassbiomass_step")
+vars_all <- c("elev_target","trasp_target","slope_target",   # for the target point variables
+                 "rank_perctreecov_target", "rank_forbgrassbiomass_target")
 
-# now concatinate all the variables together so you have all the vars you'll need in one object
-vars_all <- c(vars_target, vars_step)
 
 
 # ----------------------------------#
@@ -200,53 +188,11 @@ data <- data %>%
 #paramterize with conditional logistic regression - specifying cluster will envoke robust SE estimates using General estimating equations
 # Add dist and log(dist) as per Forrester et al. 2009 (Ecology) and Avgar et al. 2016 (MEE)
 
-#point (target models, vegetation quality)
-#loop by species
-mpoint_list <- list()
-spp <- unique(data$species)
 
-
-for(i in 1:length(spp)){
-  data_spp <- data %>% filter(species == spp[i])
-  
-mpoint <- clogit(case~dist+log(dist)+elev_target+trasp_target+slope_target+
-                   rank_perctreecov_target + rank_forbgrassbiomass_target +
-                   rank_IRGVals_target + rank_csumNDVImax_target +
-                   strata(strata)+ cluster(id_yr_seas), # cluster term says that you assume steps within each cluster are correlated with each other, but steps among the clusters are independent
-                 x=TRUE, y=TRUE,  #these ensure that your dataframe is saved within the model object
-                 method = "efron",data=data_spp)
-
-mpoint_list[[i]] <- mpoint
-}
-
-names(mpoint_list) <- spp
-
-summary(mpoint_list[[1]])
-confint(mpoint_list[[1]])
-
-#create table of coeff and summary stats, save as txt file
-for(i in 1:length(mpoint_list)){
-  summ_stat <- as.data.frame(round(coef(summary(mpoint_list[[i]])), digits = 2))
-  summ_stat <- tibble::rownames_to_column(summ_stat, "Variable")
-  write.table(summ_stat, file = paste0("./Code output/ssf_summ_point_vegqual_movelab5_", spp[[i]], ".txt"),
-              sep = ",", quote = FALSE, row.names = FALSE)
-}
-
-  ##plot coefficients
-  library(sjPlot)
-  for(i in 1:length(mpoint_list)){
-   print(sjPlot::plot_model(mpoint_list[[i]], rm.terms = c("rank_IRGVals_target",
-                                                           "rank_csumNDVImax_target"),
-                     title = paste0(spp[i], " endpoints model coeff.")))
-  }
-
-# test variance inflation factors (they should all be below 3-4 or so)
-vif(glm(case~dist+log(dist)+elev_target+trasp_target+slope_target+
-          rank_perctreecov_target + rank_forbgrassbiomass_target, data=data))
 
 #point (target models, NO vegetation quality)
 #loop by species
-mpoint_list_nv <- list()
+ssmod_list_nv <- list()
 spp <- unique(data$species)
 
 
@@ -259,22 +205,19 @@ for(i in 1:length(spp)){
                    x=TRUE, y=TRUE,  #these ensure that your dataframe is saved within the model object
                    method = "efron",data=data_spp)
   
-  mpoint_list_nv[[i]] <- mpoint
+  ssmod_list_nv[[i]] <- mpoint
 }
 
-names(mpoint_list_nv) <- spp
+names(ssmod_list_nv) <- spp
 
-summary(mpoint_list_nv[[1]])
-confint(mpoint_list_nv[[1]])
-
-saveRDS(mpoint_list_nv, file = "./Code output/SSF_endpoint_topohab_models.RDS")
+summary(ssmod_list_nv[[1]])
+confint(ssmod_list_nv[[1]])
 
 ##plot coefficients
 library(sjPlot)
-for(i in 1:length(mpoint_list_nv)){
-  print(sjPlot::plot_model(mpoint_list_nv[[i]], 
-                           title = paste0(spp[i], " points model coeff."),
-                           axis.lim = c(0.01, 1000)))
+for(i in 1:length(ssmod_list_nv)){
+  print(sjPlot::plot_model(ssmod_list_nv[[i]], 
+                           title = paste0(spp[i], " points model coeff.")))
 }
 
 # test variance inflation factors (they should all be below 3-4 or so)
@@ -283,64 +226,22 @@ vif(glm(case~dist+log(dist)+elev_target+trasp_target+slope_target+
 
 
 #create table of coeff and summary stats, save as txt file
-for(i in 1:length(mpoint_list_nv)){
-  summ_stat <- as.data.frame(round(coef(summary(mpoint_list_nv[[i]])), digits = 2))
+for(i in 1:length(ssmod_list_nv)){
+  summ_stat <- as.data.frame(round(coef(summary(ssmod_list_nv[[i]])), digits = 2))
   summ_stat <- tibble::rownames_to_column(summ_stat, "Variable")
-  write.table(summ_stat, file = paste0("./Code output/ssf_summ_point_movelab5_", spp[[i]], ".txt"),
+  write.table(summ_stat, file = paste0("./Code output/ssf_statespace_movelab7_", spp[[i]], ".txt"),
               sep = ",", quote = FALSE, row.names = FALSE)
 }
 
 
+#test QIC between state space model and previous end points ssfs
+endpoint_mod <- readRDS("./Code output/SSF_endpoint_topohab_models.RDS")
 
-#step models
-mstep_list <- list()
-
-for(i in 1:length(spp)){
-  data_spp <- data %>% filter(species == spp[i])
-mstep <- clogit(case~dist+log(dist)+elev_step+trasp_step+slope_step+
-                  rank_perctreecov_step + rank_forbgrassbiomass_step +
-                  strata(strata)+cluster(id_yr_seas),
-                x=TRUE, y=TRUE,  #these ensure that your dataframe is saved within the model object
-                method = "efron",data=data_spp)
-
-mstep_list[[i]] <- mstep
-}
-
-names(mstep_list) <- spp
- 
-summary(mstep_list[[1]])
-
-##plot coefficients
-library(sjPlot)
-for(i in 1:length(mstep_list)){
-  print(sjPlot::plot_model(mstep_list[[i]], 
-                           title = paste0(spp[i], " step length model coeff.")))
-}
-Q
-# test variance inflation factors
-vif(glm(case~dist+log(dist)+elev_step+trasp_step+slope_step+
-          tpi_step+rank_perctreecov_step + rank_forbgrassbiomass_step,
-        data=data))
-
-
-round(summary(mpoint)$coefficients,3)
-round(summary(mstep)$coefficients,3)
-
-#create table of coeff and summary stats, save as txt file
-for(i in 1:length(mstep_list)){
-  summ_stat <- as.data.frame(round(coef(summary(mstep_list[[i]])), digits = 2))
-  summ_stat <- tibble::rownames_to_column(summ_stat, "Variable")
-  write.table(summ_stat, file = paste0("./Code output/ssf_summ_step_movelab5_", spp[[i]], ".txt"),
-              sep = ",", quote = FALSE, row.names = FALSE)
-}
-
-
-#test QIC between the three models
 qic_list <- list()
 for(i in 1:length(spp)){
-qic <- cbind(model=c("point- forage quality", "point", "step"),rbind(CalcQIC(mpoint_list[[i]], details=TRUE), 
-                                    CalcQIC(mpoint_list_nv[[i]], details=TRUE),   
-                                    CalcQIC(mstep_list[[i]], details=TRUE)))
+qic <- cbind(model=c("state space", "target point"),
+             rbind(CalcQIC(ssmod_list_nv[[i]], details=TRUE),   
+                                    CalcQIC(endpoint_mod[[i]], details=TRUE)))
 
 qic_list[[i]] <- qic
 }
@@ -349,10 +250,14 @@ names(qic_list) <- spp
 
 #save as txt file
 for(i in 1:length(qic_list)){
-write.table(qic_list[[i]], file = paste0("./Code output/ssf_qic_movelab5_", spp[[i]], ".txt"),
+write.table(qic_list[[i]], file = paste0("./Code output/ssf_qic_movelab7_", spp[[i]], ".txt"),
             sep = ",", quote = FALSE, row.names = FALSE)
 }
 
 # QICR is what you want to minimize. It's like AIC, but for models with a cluster term specified
 # Check and make sure n and nevent are the exact same between the different models you are comparing!
 
+for(i in 1:length(endpoint_mod)){
+  print(sjPlot::plot_model(endpoint_mod[[i]], 
+                           title = paste0(spp[i], " target points model coeff.")))
+}

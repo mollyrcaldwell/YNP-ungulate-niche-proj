@@ -1,0 +1,51 @@
+---
+title: "YNP_ungulate_indiv_habitat summary: day, wk, mo, seas, yr"
+author: "Molly Caldwell"
+date: '2022-07-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(tidyverse)
+```
+
+```{r}
+#load data
+data <- readRDS("./Code output/individual_habitat_metrics/allindiv_gpspts_habextract.rds")
+
+#remove geometry
+data$geometry <- NULL
+
+#rename ndvi fitted
+```
+
+#Summary habitat variables by day
+Mean and SD
+
+```{r}
+hab_day <- data %>%
+  group_by(id_yr_seas, date_only) %>%
+  summarize(elev_avg = mean(elev), elev_sd = sd(elev),
+            trasp_avg = mean(trasp), trasp_sd = sd(trasp),
+            slope_avg = mean(slope), slope_sd = sd(slope),
+            tpi_avg = mean(tpi), tpi_sd = sd(tpi),
+            forbgrass_biomass_avg = mean(forbgrass_biomass), 
+            forbgrass_biomass_sd = sd(forbgrass_biomass),
+            perc_treecov_avg = mean(perc_treecov), 
+            perc_treecov_sd = sd(perc_treecov),
+            perc_shrubcov_avg = mean(perc_shrubcov), 
+            perc_shrubcov_sd = sd(perc_shrubcov),
+            snowdepth_avg = mean(snowdepth), snowdepth_sd = sd(snowdepth),
+            swe_avg = mean(swe), swe_sd = sd(swe),
+            elev_avg = mean(elev), elev_sd = sd(elev),)
+```
+
+
+

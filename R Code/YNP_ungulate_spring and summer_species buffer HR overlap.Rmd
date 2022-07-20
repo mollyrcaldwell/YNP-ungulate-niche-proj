@@ -1,0 +1,679 @@
+---
+title: "YNP Ungulate Spring & Summer Species Buffer HR Overlap"
+author: "Molly Caldwell"
+date: "6/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(rgeos)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+#library(BBMM) # fix
+library(lubridate)
+library(parallel)
+library(tidyverse)
+library(rmapshaper)
+```
+
+```{r}
+#load seasonal individual HRs
+HRs <- readRDS("./Code output/individual_buffer_HRs/indiv_buffHR_season.rds")
+
+#subset by spring and summer
+HRs <- HRs %>% filter(stringr::str_detect(id_yr_seas, "spring|summer"))
+
+#add year variable
+HRs$year <- year(HRs$firstdate)
+
+```
+
+#Heatmap overlap- just generates number ids per spp overlap
+
+```{r}
+#individual overlap HRs- heatmap
+#loop by species and year for spring and summer
+yr <- unique(HRs$year)
+spp <- unique(HRs$species)
+ints_lst <- list()
+ints_spring <- list()
+ints_summer <- list()
+
+# prepare parallel processing
+   #identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("HRs", "yr", "ints_spring", "ints_summer"))
+
+#spring loop
+for(i in 1:length(yr)){
+  for(j in 1:length(spp)){
+    print(paste0("spring", " i: ", i, " j: ", j))
+    
+tmp <- HRs %>% filter(stringr::str_detect(id_yr_seas, "spring")) %>%
+      filter(year == yr[i]) %>%
+  filter(species == spp[j])# this is a sf object (each row a separate polygon)
+if(nrow(tmp) > 0){
+    # create intersection between first 2 ids
+    if(st_intersects(tmp$geometry[1], tmp$geometry[2], sparse=FALSE)){
+      ints <- data.frame(numb.ids=2, geometry=st_intersection(tmp$geometry[1], tmp$geometry[2])) %>%
+        st_as_sf(sf_column_name = "geometry")
+
+      # mapview(ints)
+      # create polygon of the union of the two ids, less their intersection
+      tmp2 <- ms_erase(st_union(tmp$geometry[1], tmp$geometry[2]), erase=ints)
+      
+      # create a intersection dataset with each row representing a polygon with a given number of animals using it
+      ints$species <- NULL
+      ints <- rbind(ints,
+                    st_as_sf(data.frame(numb.ids=1, geometry=tmp2), sf_column_name = "geometry"))
+
+      rm(tmp2)
+
+    }else{
+      ints <- st_as_sf(data.frame(numb.ids=1, geometry=st_union(tmp$geometry[1], tmp$geometry[2])), sf_column_name = "geometry")
+
+    }
+
+
+    # mapview(ints, zcol="numb.ids")
+    # mapview(ints[2,])
+
+    # loop through the rest of the animals
+    for(z in 3:nrow(tmp)){
+      print(z)
+      
+      # figure out which rows actually intersect with this new animal
+      ints.flag <- st_intersects(ints, tmp$geometry[z], sparse=FALSE)[,1]
+      if(any(ints.flag)){  # if any are true
+        
+        # grab the intersections of the new id with the old ones
+        ints2 <- st_intersection(ints, 
+                                 st_make_valid(st_set_precision(tmp$geometry[z], 1000000)))
+        
+        ints2$numb.ids = ints2$numb.ids+1  # add another individual to those intersections
+
+        # mapview(ints2) + mapview(ints) + mapview(tmp$geometry[z])
+        # remove any that are not a polygon, multipolygon or geometrycollection
+        # basically, every once and a while st_intersection makes a line! and we need to remove those.
+
+        ints2 <- ints2[st_geometry_type(ints2) %in% c("POLYGON", "MULTIPOLYGON", "GEOMETRYCOLLECTION"), ]
+
+        # if the feature is a geometrycollection, we need to do some extra work
+        
+        if(any(st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION"))){
+          gc <- ints2 %>% filter(st_geometry_type(geometry) == "GEOMETRYCOLLECTION")
+          newrows <- st_collection_extract(gc, type = c("POLYGON"))
+
+          ints2 <- ints2[st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION")==FALSE,]
+          ints2$species <- NULL
+          newrows$species <- NULL
+          ints2 <- rbind(ints2, newrows)
+
+          #  need to union rows with the same number of ids now!!! this could happen.
+          ints2 <- ints2 %>%
+            group_by(numb.ids) %>%
+            summarise(do_union=TRUE)
+        } 
+
+        # now add in original ints layers where there was no intersection
+        therest <- ms_erase(ints[ints$numb.ids != 1,], erase=ints2)
+        # mapview(ints2) + mapview(ints) + mapview(tmp$geometry[z]) + mapview(therest)
+
+        if(st_is_empty(therest)[1]==FALSE){
+          therest$species <- NULL
+          ints2$species <- NULL
+          ints2 <- rbind(ints2, therest)
+        }
+
+        #  need to union rows with the same number of ids now!!! this could happen.
+        ints2 <- ints2 %>%
+          group_by(numb.ids) %>% st_make_valid() %>%
+          summarise(do_union=TRUE)
+        
+        # if the feature is a geometrycollection, we need to do some extra work
+        if(any(st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION"))){
+          gc <- ints2 %>% filter(st_geometry_type(geometry) == "GEOMETRYCOLLECTION")
+          newrows <- st_collection_extract(gc, type = c("POLYGON"))
+
+          ints2 <- ints2[st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION")==FALSE,]
+          ints2$species <- NULL
+          newrows$species <- NULL
+          ints2 <- rbind(ints2, newrows)
+
+          #  need to union rows with the same number of ids now!!! this could happen.
+          ints2 <- ints2 %>%
+            group_by(numb.ids) %>%
+            summarise(do_union=TRUE)
+        } 
+
+      }else{  # if there are no intersections, move forward the intersections without the bottom layer (i.e., where there are no overlaps)
+        ints2 <- ints[ints$numb.ids != 1,]
+      }
+
+      # now recreate the bottom layer (i.e., where there are no overlaps)
+      if(nrow(ints2)==0){
+        ints2 <- st_as_sf(data.frame(numb.ids=1,
+                                     geometry=st_union(st_union(ints$geometry), tmp$geometry[z])),
+                          sf_column_name = "geometry")
+      }else{
+        # if the feature is a geometrycollection, we need to do some extra work
+        
+        if(any(st_geometry_type(ints) %in% c("GEOMETRYCOLLECTION"))){
+          gc <- ints2 %>% filter(st_geometry_type(geometry) == "GEOMETRYCOLLECTION")
+          newrows <- st_collection_extract(gc, type = c("POLYGON"))
+
+          ints <- ints[st_geometry_type(ints) %in% c("GEOMETRYCOLLECTION")==FALSE,]
+          ints$species <- NULL
+          newrows$species <- NULL
+          ints2<- rbind(ints, newrows)
+
+          #  need to union rows with the same number of ids now!!! this could happen.
+          ints <- ints %>%
+            group_by(numb.ids) %>%
+            summarise(do_union=TRUE)
+        }
+        
+        u <- st_union(st_union(st_make_valid(ints$geometry)), 
+                                  st_make_valid(tmp$geometry[z]))
+        
+        if(st_geometry_type(u) %in% c("GEOMETRYCOLLECTION")){
+          u <- st_collection_extract(u, type = c("POLYGON"))
+        }
+        
+        tmp2 <- ms_erase(u, erase= st_make_valid(ints2))
+        ints2$species <- NULL
+        ints2 <- rbind(ints2,
+                      st_as_sf(data.frame(numb.ids=1, geometry=tmp2), sf_column_name = "geometry"))
+
+      }
+
+      # mv <- mapview(ints2, zcol="numb.ids")
+      # print(mv)
+      # readline("click enter to go to the next one:")
+
+      ints <- ints2    #update the object
+      ints <- ints[order(ints$numb.ids, decreasing = TRUE),]
+      ints <- st_make_valid(ints)  # this needed to be done for all sorts of issues!
+      ints$species <- spp[[j]] #add species
+      ints_lst[[j]] <- st_union(ints, by_feature = TRUE)  # this needed to be done so that ms_erase works properly
+
+      # mapview(ints, zcol="numb.ids")
+    }  # end of loop over the rows
+}
+  }
+ints_spring[[i]] <- ints_lst
+}
+names(ints_spring) <- yr
+
+#save ints_spring
+saveRDS(ints_spring, "./Code output/HRoverlap_bysppandyr_spring.Rds")
+
+
+#Summer loop###################################################################
+for(i in 1:length(yr)){
+  for(j in 1:length(spp)){
+    print(paste0("summer", " i: ", i, " j: ", j))
+    
+tmp <- HRs %>% filter(stringr::str_detect(id_yr_seas, "summer")) %>%
+      filter(year == yr[i]) %>%
+  filter(species == spp[j])# this is a sf object (each row a separate polygon)
+if(nrow(tmp) > 0){
+    # create intersection between first 2 ids
+    if(st_intersects(tmp$geometry[1], tmp$geometry[2], sparse=FALSE)){
+      ints <- data.frame(numb.ids=2, geometry=st_intersection(tmp$geometry[1], 
+                                                              tmp$geometry[2])) %>%
+        st_as_sf(sf_column_name = "geometry")
+
+      # mapview(ints)
+      # create polygon of the union of the two ids, less their intersection
+      tmp2 <- ms_erase(st_union(tmp$geometry[1], tmp$geometry[2]), erase=ints)
+      
+      # create a intersection dataset with each row representing a polygon with a given number of animals using it
+      ints$species <- NULL
+      ints <- rbind(ints,
+                    st_as_sf(data.frame(numb.ids=1, geometry=tmp2), sf_column_name = "geometry"))
+
+      rm(tmp2)
+
+    }else{
+      ints <- st_as_sf(data.frame(numb.ids=1, geometry=st_union(tmp$geometry[1], tmp$geometry[2])), sf_column_name = "geometry")
+
+    }
+
+    # mapview(ints, zcol="numb.ids")
+    # mapview(ints[2,])
+
+    # loop through the rest of the animals
+    for(z in 3:nrow(tmp)){
+      print(z)
+      
+      # figure out which rows actually intersect with this new animal
+      ints.flag <- st_intersects(ints, tmp$geometry[z], sparse=FALSE)[,1]
+      if(any(ints.flag)){  # if any are true
+        
+        # grab the intersections of the new id with the old ones
+        ints2 <- st_intersection(ints, 
+                                 st_make_valid(st_set_precision(tmp$geometry[z], 1000000)))
+        ints2$numb.ids = ints2$numb.ids+1  # add another individual to those intersections
+
+        # mapview(ints2) + mapview(ints) + mapview(tmp$geometry[z])
+        # remove any that are not a polygon, multipolygon or geometrycollection
+        # basically, every once and a while st_intersection makes a line! and we need to remove those.
+
+        ints2 <- ints2[st_geometry_type(ints2) %in% c("POLYGON", "MULTIPOLYGON", "GEOMETRYCOLLECTION"), ]
+
+        # if the feature is a geometrycollection, we need to do some extra work
+        
+        if(any(st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION"))){
+          gc <- ints2 %>% filter(st_geometry_type(geometry) == "GEOMETRYCOLLECTION")
+          newrows <- st_collection_extract(gc, type = c("POLYGON"))
+
+          ints2 <- ints2[st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION")==FALSE,]
+          ints2$species <- NULL
+          newrows$species <- NULL
+          ints2 <- rbind(ints2, newrows)
+
+          #  need to union rows with the same number of ids now!!! this could happen.
+          ints2 <- ints2 %>%
+            group_by(numb.ids) %>%
+            summarise(do_union=TRUE)
+        } 
+
+        # now add in original ints layers where there was no intersection
+        therest <- ms_erase(ints[ints$numb.ids != 1,], erase=ints2)
+        # mapview(ints2) + mapview(ints) + mapview(tmp$geometry[z]) + mapview(therest)
+
+        if(st_is_empty(therest)[1]==FALSE){
+          therest$species <- NULL
+          ints2$species <- NULL
+          ints2 <- rbind(ints2, therest)
+        }
+
+        #  need to union rows with the same number of ids now!!! this could happen.
+        ints2 <- ints2 %>%
+          group_by(numb.ids) %>% st_make_valid() %>%
+          summarise(do_union=TRUE)
+        
+        # if the feature is a geometrycollection, we need to do some extra work
+        if(any(st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION"))){
+          gc <- ints2 %>% filter(st_geometry_type(geometry) == "GEOMETRYCOLLECTION")
+          newrows <- st_collection_extract(gc, type = c("POLYGON"))
+
+          ints2 <- ints2[st_geometry_type(ints2) %in% c("GEOMETRYCOLLECTION")==FALSE,]
+          ints2$species <- NULL
+          newrows$species <- NULL
+          ints2 <- rbind(ints2, newrows)
+
+          #  need to union rows with the same number of ids now!!! this could happen.
+          ints2 <- ints2 %>%
+            group_by(numb.ids) %>%
+            summarise(do_union=TRUE)
+        } 
+
+      }else{  # if there are no intersections, move forward the intersections without the bottom layer (i.e., where there are no overlaps)
+        ints2 <- ints[ints$numb.ids != 1,]
+      }
+
+      # now recreate the bottom layer (i.e., where there are no overlaps)
+      if(nrow(ints2)==0){
+        ints2 <- st_as_sf(data.frame(numb.ids=1,
+                                     geometry=st_union(st_union(ints$geometry), tmp$geometry[z])),
+                          sf_column_name = "geometry")
+      }else{
+
+        # if the feature is a geometrycollection, we need to do some extra work
+        
+        if(any(st_geometry_type(ints) %in% c("GEOMETRYCOLLECTION"))){
+          gc <- ints %>% filter(st_geometry_type(geometry) == "GEOMETRYCOLLECTION")
+          newrows <- st_collection_extract(gc, type = c("POLYGON"))
+
+          ints <- ints[st_geometry_type(ints) %in% c("GEOMETRYCOLLECTION")==FALSE,]
+          ints$species <- NULL
+          newrows$species <- NULL
+          ints <- rbind(ints, newrows)
+
+          #  need to union rows with the same number of ids now!!! this could happen.
+          ints <- ints %>%
+            group_by(numb.ids) %>%
+            summarise(do_union=TRUE)
+        }
+        
+        un <- st_union(st_union(st_make_valid(ints$geometry)), 
+                                  st_make_valid(tmp$geometry[z]))
+        
+        #sometimes union ends up with linestring object in list, and need to remove that
+        v <- c()
+        for(y in 1:length(un[[1]])){
+        if(any(str_detect(class(un[[1]][[y]]), "LINESTRING"))){
+          v <- c(y, v)
+        }
+        }
+        un[[1]][v] <- NULL
+        
+        tmp2 <- ms_erase(un, erase= st_make_valid(ints2))
+        ints2$species <- NULL
+        ints2 <- rbind(ints2,
+                      st_as_sf(data.frame(numb.ids=1, geometry=tmp2), sf_column_name = "geometry"))
+
+      }
+
+      # mv <- mapview(ints2, zcol="numb.ids")
+      # print(mv)
+      # readline("click enter to go to the next one:")
+
+      ints <- ints2    #update the object
+      ints <- ints[order(ints$numb.ids, decreasing = TRUE),]
+      ints <- st_make_valid(ints)  # this needed to be done for all sorts of issues!
+      ints$species <- spp[[j]] #add species
+      ints_lst[[j]] <- st_union(ints, by_feature = TRUE)  # this needed to be done so that ms_erase works properly
+
+      # mapview(ints, zcol="numb.ids")
+    }  # end of loop over the rows
+}
+}
+ints_summer[[i]] <- ints_lst
+}
+names(ints_summer) <- yr
+
+#save ints_summer
+saveRDS(ints_summer, "./Code output/HRoverlap_bysppandyr_summer.Rds")
+
+stopCluster(clust)
+```
+
+#Overlay species id overlap areas- determine where multispecies overlap hotspots are in 2020 and 2021
+
+```{r}
+#bison overlap areas with each species- pairwise
+  #2020, spring
+    int_bh <- st_intersection(ints_spring[[4]][[2]], ints_spring[[4]][[1]])
+    int_d <- st_intersection(ints_spring[[4]][[2]], ints_spring[[4]][[3]])
+    int_e <- st_intersection(ints_spring[[4]][[2]], ints_spring[[4]][[4]])
+    int_ph <- st_intersection(ints_spring[[4]][[2]], ints_spring[[4]][[5]])
+    
+    pairint_sp_2020 <- rbind(int_bh, int_d, int_e, int_ph)
+    pairint_sp_2020$year = 2020
+    pairint_sp_2020$seas = "spring"
+    
+  #2021, spring
+    int_bh <- st_intersection(ints_spring[[5]][[2]], ints_spring[[5]][[1]])
+    int_d <- st_intersection(ints_spring[[5]][[2]], ints_spring[[5]][[3]])
+    int_e <- st_intersection(ints_spring[[5]][[2]], ints_spring[[5]][[4]])
+    int_ph <- st_intersection(ints_spring[[5]][[2]], ints_spring[[5]][[5]])
+    
+    pairint_sp_2021 <- rbind(int_bh, int_d, int_e, int_ph)
+    pairint_sp_2021$year = 2021
+    pairint_sp_2021$seas = "spring"
+    
+      #2020, summer
+    int_bh <- st_intersection(ints_summer[[4]][[2]], ints_summer[[4]][[1]])
+    int_d <- st_intersection(ints_summer[[4]][[2]], ints_summer[[4]][[3]])
+    int_e <- st_intersection(ints_summer[[4]][[2]], ints_summer[[4]][[4]])
+    int_ph <- st_intersection(ints_summer[[4]][[2]], ints_summer[[4]][[5]])
+    
+    pairint_su_2020 <- rbind(int_bh, int_d, int_e, int_ph)
+    pairint_su_2020$year = 2020
+    pairint_su_2020$seas = "summer"
+    
+  #2021, summer
+    int_bh <- st_intersection(ints_summer[[5]][[2]], ints_summer[[5]][[1]])
+    int_d <- st_intersection(ints_summer[[5]][[2]], ints_summer[[5]][[3]])
+    int_e <- st_intersection(ints_summer[[5]][[2]], ints_summer[[5]][[4]])
+    int_ph <- st_intersection(ints_summer[[5]][[2]], ints_summer[[5]][[5]])
+    
+    pairint_su_2021 <- rbind(int_bh, int_d, int_e, int_ph)
+    pairint_su_2021$year = 2021
+    pairint_su_2021$seas = "summer"
+  
+#combine spring, summer and years
+pairint <- rbind(pairint_sp_2020, pairint_sp_2021, pairint_su_2020, pairint_su_2021)
+
+#combine species to 1 variable
+pairint <- pairint %>%
+  mutate(comb_spp = paste(species, species.1, sep = "-"))
+
+```
+
+```{r}
+#bison and multispecies overlap (bi-ph-el, bi-ph-el-md, bi-ph-el-bh)
+#no areas in sp/su 2020/21 where all 5 species overlap
+
+#spring 2020
+int_bpe <- purrr::reduce(list(ints_spring[[4]][[2]],ints_spring[[4]][[4]], 
+                              ints_spring[[4]][[5]]), st_intersection)
+
+int_bpe$species.3 <- NA
+int_bpe$numb.ids.3 <- NA
+
+int_bped <- purrr::reduce(list(ints_spring[[4]][[2]],ints_spring[[4]][[4]], 
+                              ints_spring[[4]][[5]], ints_spring[[4]][[3]]), 
+                              st_intersection)
+
+int_bpeb <- purrr::reduce(list(ints_spring[[4]][[2]],ints_spring[[4]][[4]], 
+                              ints_spring[[4]][[5]], ints_spring[[4]][[1]]), 
+                              st_intersection)
+
+int_ms_sp_20 <- rbind(int_bpe, int_bped, int_bpeb)
+int_ms_sp_20$year <- 2020
+int_ms_sp_20$seas <- "spring"
+
+
+#spring 2021
+int_bpe <- purrr::reduce(list(ints_spring[[5]][[2]],ints_spring[[5]][[4]], 
+                              ints_spring[[5]][[5]]), st_intersection)
+
+int_bpe$species.3 <- NA
+int_bpe$numb.ids.3 <- NA
+
+int_bped <- purrr::reduce(list(ints_spring[[5]][[2]],ints_spring[[5]][[4]], 
+                              ints_spring[[5]][[5]], ints_spring[[5]][[3]]), 
+                              st_intersection)
+
+int_bpeb <- purrr::reduce(list(ints_spring[[5]][[2]],ints_spring[[5]][[4]], 
+                              ints_spring[[5]][[5]], ints_spring[[5]][[1]]), 
+                              st_intersection)
+
+int_ms_sp_21 <- rbind(int_bpe, int_bped, int_bpeb)
+int_ms_sp_21$year <- 2021
+int_ms_sp_21$seas <- "spring"
+
+#summer 2020
+int_bpe <- purrr::reduce(list(ints_summer[[4]][[2]],ints_summer[[4]][[4]], 
+                              ints_summer[[4]][[5]]), st_intersection)
+
+int_bpe$species.3 <- NA
+int_bpe$numb.ids.3 <- NA
+
+int_bped <- purrr::reduce(list(ints_summer[[4]][[2]],ints_summer[[4]][[4]], 
+                              ints_summer[[4]][[5]], ints_summer[[4]][[3]]), 
+                              st_intersection)
+
+int_bpeb <- purrr::reduce(list(ints_summer[[4]][[2]],ints_summer[[4]][[4]], 
+                              ints_summer[[4]][[5]], ints_summer[[4]][[1]]), 
+                              st_intersection)
+
+int_ms_su_20 <- rbind(int_bpe, int_bped, int_bpeb)
+int_ms_su_20$year <- 2020
+int_ms_su_20$seas <- "summer"
+
+
+#summer 2021
+int_bpe <- purrr::reduce(list(ints_summer[[5]][[2]],ints_summer[[5]][[4]], 
+                              ints_summer[[5]][[5]]), st_intersection)
+
+int_bpe$species.3 <- NA
+int_bpe$numb.ids.3 <- NA
+
+int_bped <- purrr::reduce(list(ints_summer[[5]][[2]],ints_summer[[5]][[4]], 
+                              ints_summer[[5]][[5]], ints_summer[[5]][[3]]), 
+                              st_intersection)
+
+int_bpeb <- purrr::reduce(list(ints_summer[[5]][[2]],ints_summer[[5]][[4]], 
+                              ints_summer[[5]][[5]], ints_summer[[5]][[1]]), 
+                              st_intersection)
+
+int_ms_su_21 <- rbind(int_bpe, int_bped, int_bpeb)
+int_ms_su_21$year <- 2021
+int_ms_su_21$seas <- "summer"
+
+
+ms_int <- rbind(int_ms_sp_20, int_ms_sp_21, int_ms_su_20, int_ms_su_21)
+
+ms_int <- ms_int %>%
+  mutate(comb_spp = if_else(is.na(species.3), paste(species, species.1, 
+                                                    species.2, sep = "-"),
+                            paste(species, species.1, species.2, species.3, 
+                                  sep = "-")))
+```
+
+```{r}
+#combine multispecies and pairwise intersection data
+pairint$numb.ids.2 = NA
+pairint$numb.ids.3 = NA
+pairint$species.2 = NA
+pairint$species.3 = NA
+
+all_int <- rbind(pairint, ms_int)
+
+#remove linestring geometry type data from intersects to save as shapefile (only 1 intersect)
+all_int <- all_int %>%
+  filter(st_geometry_type(geometry) != "GEOMETRYCOLLECTION")
+
+pairint <- pairint %>%
+  filter(st_geometry_type(geometry) != "GEOMETRYCOLLECTION")
+
+#save as shapefiles
+st_write(all_int, "./Code output/all_spp_intersects_Jul2022.shp",
+          append = FALSE)
+st_write(pairint, "./Code output/bison_pair_intersects_Jul2022.shp",
+          append = FALSE)
+st_write(ms_int, "./Code output/bison_multi_intersects_Jul2022.shp",
+          append = FALSE)
+```
+
+
+
+
+
+#########EXTRA CODE#######################
+
+#HR intersection, by year and spring or summer
+Lines solution below- jenky alternative to using st_intersection with polygons.
+
+```{r}
+#loop by year for spring and summer
+yr <- unique(HRs$year)
+int_spring <- list()
+int_summer <- list()
+
+# prepare parallel processing
+   #identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("HRs", "yr", "int_spring", "int_summer"))
+ 
+HRs_spring <- HRs %>% filter(stringr::str_detect(id_yr_seas, "spring")) %>%
+      filter(year == "2016")
+
+HRs_sub <- HRs_spring[1:10,]
+
+HRs_lns <- st_cast(HRs_sub, to = "MULTILINESTRING")
+
+t <- HRs_lns %>% st_intersection()
+
+t2 <- t %>% filter(n.overlaps > 1)
+
+
+stopCluster(clust)
+```
+
+
+#NOT WORKING- ST_INTERSECTIONS is being a pain in the ass :((((
+
+```{r}
+yr <- unique(HRs$year)
+int_spring <- list()
+int_summer <- list()
+
+# prepare parallel processing
+   #identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("HRs", "yr", "int_spring", "int_summer"))
+
+  for(i in 1:length(yr)){
+    HRs_spring <- HRs %>% filter(stringr::str_detect(id_yr_seas, "spring")) %>%
+      filter(year == yr[[i]])
+    
+    #change polygons to lines so that st_intersections will work
+    HRs_spring_lns <- st_cast(HRs_spring, to = "MULTILINESTRING")
+    
+    #intersect lines
+    int_spring[[i]] <- HRs_spring_lns %>%
+      st_intersection()
+    
+    int_spring[[i]]$spp_ol = sapply(int_spring[[i]]$origins,
+        function(x) paste0(as.character(HRs_spring_lns$species)[x], collapse = ","))
+
+    int_spring[[i]] <- int_spring[[i]] %>%
+      mutate(num_bighorn = stringr::str_count(spp_ol, "bighorn")) %>%
+      mutate(num_bison = stringr::str_count(spp_ol, "bison")) %>%
+      mutate(num_deer = stringr::str_count(spp_ol, "deer")) %>%
+      mutate(num_elk = stringr::str_count(spp_ol, "elk")) %>%
+      mutate(num_pronghorn = stringr::str_count(spp_ol, "pronghorn"))
+  }
+  
+  names(int_spring) <- yr
+  
+  for(i in 1:length(yr)){
+    HRs_summer <- HRs %>% filter(season == "summer") %>%
+      filter(year == yr[[i]])
+    
+    int_summer[[i]] <- HRs_summer %>% lwgeom::st_snap_to_grid(50) %>%
+      st_set_precision(1) %>% st_make_valid() %>% st_intersection()
+    
+    int_summer[[i]]$spp_ol = sapply(int_summer[[i]]$origins,
+        function(x) paste0(as.character(HRs_summer$species)[x], collapse = ","))
+
+    int_summer[[i]] <- int_summer[[i]] %>%
+      mutate(num_bighorn = stringr::str_count(spp_ol, "bighorn")) %>%
+      mutate(num_bison = stringr::str_count(spp_ol, "bison")) %>%
+      mutate(num_deer = stringr::str_count(spp_ol, "deer")) %>%
+      mutate(num_elk = stringr::str_count(spp_ol, "elk")) %>%
+      mutate(num_pronghorn = stringr::str_count(spp_ol, "pronghorn"))
+  }
+  
+  names(int_summer) <- yr
+  
+  
+stopCluster(clust)
+
+
+```
+
+```{r}
+hrs_un <- st_union(HRs_sub, by_feature = TRUE)
+int <- hrs_un %>% st_make_valid() %>% st_buffer(dist = 0) %>% st_intersection()
+```
+
+
+
+
+

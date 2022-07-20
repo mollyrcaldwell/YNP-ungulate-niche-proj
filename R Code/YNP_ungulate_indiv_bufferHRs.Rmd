@@ -1,0 +1,384 @@
+---
+title: "YNP_ungulate_indiv_bufferHRs"
+author: "Molly Caldwell"
+date: '2022-06-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(lubridate)
+library(parallel)
+library(tidyverse)
+library(multidplyr)
+```
+
+#Load GPS Data
+
+```{r}
+#load seasonal GPS data with 2 hour fixes for all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+
+data <- st_as_sf(data)
+
+#add date only column
+data <- data %>%
+  mutate(date_only = format(date, format = "%Y-%m-%d"))
+
+#remove extra date column
+data$date2 <- NULL
+```
+
+#Buffer home range- daily
+Turns gps point path into lines and puts 200-m buffer around them.
+Buffer HRs by id_yr_seas and day.
+
+```{r}
+#create list to save line data
+lns_list <- list()
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data"))
+
+u_id <- unique(data$id_yr_seas)
+
+for(i in 1:length(u_id)){
+  print(paste0("i: ", i))
+  
+  data_id <- data %>% filter(id_yr_seas == u_id[i])
+  
+  dt <- unique(data_id$date_only)
+  
+  lns <- do.call(c, lapply(1:length(dt), function(e){
+
+  return(st_cast(st_combine(data_id[data_id$date_only == dt[e],]), "LINESTRING"))
+
+}))
+  
+  lns <- data.frame(id_yr_seas = u_id[i],
+                  firstdate=do.call(c, lapply(dt, 
+                function(e){min(data_id$date[data_id$date_only == e], na.rm=TRUE)})),
+              lastdate=do.call(c, lapply(dt, 
+              function(e){max(data_id$date[data_id$date_only == e], na.rm=TRUE)})),
+              geometry=lns)
+  
+  
+  lns_list[[i]] <- lns
+  
+}
+ 
+lns <- data.frame(Reduce(rbind, lns_list))
+
+lns <- st_as_sf(lns, sf_column_name = "geometry")
+
+#remove observation with only one pt/day
+lns <- lns %>%
+  group_by(id_yr_seas, firstdate) %>%
+  mutate(length_geom = length(geometry[[1]])) %>%
+  filter(length_geom > 2)
+
+# now calculate the Home range polygon for each line string
+HRs_day <- st_buffer(lns, dist = 200)    #200m buffer
+
+stopCluster(clust)   #stop the parallelization framework
+
+#add species to HRs
+HRs_day <- HRs_day %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+
+#individual HR area summary- takes awhile
+cluster <- new_cluster(no_cores)
+cluster_library(cluster, packages = c("dplyr", "sf"))
+cluster_copy(cluster, "HRs_day")
+
+HRs_day <- HRs_day %>% partition(cluster) %>%
+  mutate(HR_area = st_area(geometry)) %>%
+  mutate(HR_area = as.numeric(HR_area)/1000000) %>% #convert to sq km
+  collect()
+
+#remove length geom column
+HRs_day$length_geom <- NULL
+
+#save as rds object
+saveRDS(HRs_day, "./Code output/individual_buffer_HRs/indiv_buffHR_day.rds")
+```
+
+#Buffer home range- weekly (5 days)
+Turns gps point path into lines and puts 200-m buffer around them.
+Buffer HRs by id_yr_seas and week.
+
+```{r}
+#create 5-day grouping variable per id_yr_seas
+data <- data %>% group_by(id_yr_seas) %>%
+  mutate(week = cut(as.Date(date), breaks = "5 days", include.lowest = T))
+  
+```
+
+```{r}
+#create list to save line data
+lns_list <- list()
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data"))
+
+u_id <- unique(data$id_yr_seas)
+
+for(i in 1:length(u_id)){
+  print(paste0("i: ", i))
+  
+  data_id <- data %>% filter(id_yr_seas == u_id[i])
+  
+  dt <- unique(data_id$week)
+  
+  lns <- do.call(c, lapply(1:length(dt), function(e){
+
+  return(st_cast(st_combine(data_id[data_id$week == dt[e],]), "LINESTRING"))
+
+}))
+  
+  lns <- data.frame(id_yr_seas = u_id[i],
+                  firstdate=do.call(c, lapply(dt, 
+                function(e){min(data_id$date[data_id$week == e], na.rm=TRUE)})),
+              lastdate=do.call(c, lapply(dt, 
+              function(e){max(data_id$date[data_id$week == e], na.rm=TRUE)})),
+              geometry=lns)
+  
+  
+  lns_list[[i]] <- lns
+  
+}
+ 
+lns <- data.frame(Reduce(rbind, lns_list))
+
+lns <- st_as_sf(lns, sf_column_name = "geometry")
+
+#remove observation with only one pt/day
+lns <- lns %>%
+  group_by(id_yr_seas, firstdate) %>%
+  mutate(length_geom = length(geometry[[1]])) %>%
+  filter(length_geom > 2)
+
+# now calculate the Home range polygon for each line string
+HRs_week <- st_buffer(lns, dist = 200)    #200m buffer
+
+#add species to HRs
+HRs_week <- HRs_week %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+
+#individual HR area summary
+HRs_week <- HRs_week %>%
+  mutate(HR_area = st_area(geometry)) %>%
+  mutate(HR_area = as.numeric(HR_area)/1000000) #convert to sq km
+
+#remove length geom column
+HRs_week$length_geom <- NULL
+
+stopCluster(clust)   #stop the parallelization framework
+
+#save as rds object
+saveRDS(HRs_week, "./Code output/individual_buffer_HRs/indiv_buffHR_week.rds")
+```
+
+#Buffer home range- monthly 
+Turns gps point path into lines and puts 200-m buffer around them.
+Buffer HRs by id_yr_seas and month.
+
+```{r}
+#create month grouping variable per id_yr_seas
+data <- data %>% group_by(id_yr_seas) %>%
+  mutate(month = cut(as.Date(date), breaks = "1 month", include.lowest = T))
+  
+```
+
+```{r}
+#create list to save line data
+lns_list <- list()
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data"))
+
+u_id <- unique(data$id_yr_seas)
+
+for(i in 1:length(u_id)){
+  print(paste0("i: ", i))
+  
+  data_id <- data %>% filter(id_yr_seas == u_id[i])
+  
+  dt <- unique(data_id$month)
+  
+  lns <- do.call(c, lapply(1:length(dt), function(e){
+
+  return(st_cast(st_combine(data_id[data_id$month == dt[e],]), "LINESTRING"))
+
+}))
+  
+  lns <- data.frame(id_yr_seas = u_id[i],
+                  firstdate=do.call(c, lapply(dt, 
+                function(e){min(data_id$date[data_id$month == e], na.rm=TRUE)})),
+              lastdate=do.call(c, lapply(dt, 
+              function(e){max(data_id$date[data_id$month == e], na.rm=TRUE)})),
+              geometry=lns)
+  
+  
+  lns_list[[i]] <- lns
+  
+}
+ 
+lns <- data.frame(Reduce(rbind, lns_list))
+
+lns <- st_as_sf(lns, sf_column_name = "geometry")
+
+#remove observation with only one pt/day
+lns <- lns %>%
+  group_by(id_yr_seas, firstdate) %>%
+  mutate(length_geom = length(geometry[[1]])) %>%
+  filter(length_geom > 2)
+
+# now calculate the Home range polygon for each line string
+HRs_month <- st_buffer(lns, dist = 200)    #200m buffer
+
+#add species to HRs
+HRs_month <- HRs_month %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+
+#individual HR area summary
+HRs_month <- HRs_month %>%
+  mutate(HR_area = st_area(geometry)) %>%
+  mutate(HR_area = as.numeric(HR_area)/1000000) #convert to sq km
+
+#remove length geom column
+HRs_month$length_geom <- NULL
+
+stopCluster(clust)   #stop the parallelization framework
+
+#save as rds object
+saveRDS(HRs_month, "./Code output/individual_buffer_HRs/indiv_buffHR_month.rds")
+```
+
+#Buffer home range- seasonly 
+Turns gps point path into lines and puts 200-m buffer around them.
+Buffer HRs by id_yr_seas.
+
+```{r}
+data <- data[1:10000,]
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data"))
+
+u <- unique(data$id_yr_seas)
+ 
+lns <- do.call(c, lapply(1:length(u), function(e){
+
+  return(st_cast(st_combine(data[data$id_yr_seas == u[e],]), "LINESTRING"))
+
+}))
+
+lns <- data.frame(id_yr_seas = u,
+                  firstdate=do.call(c, lapply(u, 
+                function(e){min(data$date[data$id_yr_seas == e], na.rm=TRUE)})),
+              lastdate=do.call(c, lapply(u, 
+              function(e){max(data$date[data$id_yr_seas == e], na.rm=TRUE)})),
+              geometry=lns)
+
+lns <- st_as_sf(lns, sf_column_name = "geometry")
+
+# now calculate the Home range polygon for each line string
+HRs_season <- st_buffer(lns, dist = 200)    #200m buffer
+
+#add species to HRs
+HRs_season <- HRs_season %>%
+  mutate(species = if_else(grepl("BI", id_yr_seas), "bison",
+                if_else(grepl("BH", id_yr_seas), "bighorn",
+                if_else(grepl("MD", id_yr_seas), "deer",
+                if_else(grepl("EL", id_yr_seas), "elk",
+                if_else(grepl("PR", id_yr_seas), "pronghorn", "NA"))))))
+
+#individual HR area summary
+HRs_season <- HRs_season %>%
+  mutate(HR_area = st_area(geometry)) %>%
+  mutate(HR_area = as.numeric(HR_area)/1000000) #convert to sq km
+
+
+stopCluster(clust)   #stop the parallelization framework
+
+#save as rds object
+saveRDS(HRs_season, "./Code output/individual_buffer_HRs/indiv_buffHR_season.rds")
+```
+
+#Buffer home range- annually 
+Merge seasonal ranges per id and year for individuals with entire yr of data.
+
+```{r}
+#load seasonal HRs
+HRs_season <- readRDS("./Code output/individual_buffer_HRs/indiv_buffHR_season.rds")
+
+#split id_yr_seas into 3 variables
+HRs_season <- HRs_season %>% group_by(id_yr_seas) %>%
+  mutate(cid = strsplit(id_yr_seas, "_")[[1]][1]) %>%
+   mutate(yr = strsplit(id_yr_seas, "_")[[1]][2]) %>%
+   mutate(season = strsplit(id_yr_seas, "_")[[1]][3]) %>%
+  ungroup()
+
+#filter by only cids and years with all seasons- 192 id yrs have full yr data
+HRs_season_f <- HRs_season %>%
+  group_by(cid, yr) %>%
+  filter(n() == 4)
+```
+
+```{r}
+#merge seasonal HR polygons by cid and year
+HRs_annual <- HRs_season_f %>%
+  group_by(cid, yr) %>%
+  summarize(geometry = st_union(geometry), .groups = "keep")
+
+#individual HR area summary
+HRs_annual <- HRs_annual %>%
+  mutate(HR_area = st_area(geometry)) %>%
+  mutate(HR_area = as.numeric(HR_area)/1000000) #convert to sq km
+
+#save as rds object
+saveRDS(HRs_annual, "./Code output/individual_buffer_HRs/indiv_buffHR_annual.rds")
+```
+

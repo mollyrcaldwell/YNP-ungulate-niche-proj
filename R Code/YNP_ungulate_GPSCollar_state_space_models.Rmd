@@ -21,27 +21,19 @@ library(mapview)
 library(lubridate)
 library(tidyverse)
 library(moveHMM)
-#library(devtools) #use to update jerod's MoveTools package
-#install_github("jmerkle1/MerkleLab-Code-Repository", subdir="MoveTools")
+# library(devtools) #use to update jerod's MoveTools package
+# install_github("jmerkle1/MerkleLab-Code-Repository", subdir="MoveTools")
 library(MoveTools)
 ```
 
 #Prep Data
 
 ```{r}
-#load green up data all species
-data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_greenup(mar_to_jun).rds")
+#load seasonal data all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
 
-#create list data by species for loops
-spp <- c("bighorn", "bison", "elk", "deer", "pronghorn")
-data_list <- list()
-
-for(i in 1:length(spp)){
-  data_sp <- data %>% filter(species == spp[[i]])
-  data_list[[i]] <- data_sp
-}
-
-rm(data_sp)
+#create list data by species and season for loops
+data_list <- split(data, f = list(data$species, data$season))
 
 ```
 
@@ -119,8 +111,8 @@ mean_angle <- c()
 sd_angle <- c()
 
 for(i in 1:length(data.hmm_list)){
-hist(data.hmm_list[[i]]$step, main = spp[[i]])
-hist(data.hmm_list[[i]]$angle, main = spp[[i]])
+hist(data.hmm_list[[i]]$step, main = names(data.hmm_list)[i])
+hist(data.hmm_list[[i]]$angle, main = names(data.hmm_list)[i])
 
 mean_step <- c(mean_step, mean(data.hmm_list[[i]]$step, na.rm=T))
 sd_step <- c(sd_step, sd(data.hmm_list[[i]]$step, na.rm=T))
@@ -239,16 +231,23 @@ CI(ds_model_list[[1]])
 ## then plot the model - this returns a plot of the distribution of step length and and a plot of the turning angle for
 ## the two states determined by the model; it then will give you an output for each indivdiual animal, with the 
 ## states colored in orange and blue
-plot(ds_model_list[[5]])
+plot(ds_model_list[[1]])
 
 ## this gives you a series of plots for each individual animal. The top plot shows you if they are in state 1 or 2,
 ## and the bottom two plots gives you the probability that the animal is in state 1 (middle plot) or state 2 (bottom plot)
-plotStates(ds_model_list[[5]])
+plotStates(ds_model_list[[1]])
 ```
 
 ##Triple State Model
 
 ```{r}
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data.hmm_list"))
+
 ts_model_list <- list()
 ## give some starting parameter values, this time we need three means and SDs
 for(i in 1:length(data.hmm_list)){
@@ -268,6 +267,9 @@ tripleStateModel <- fitHMM(data.hmm_list[[i]], nbStates = 3, # Note, this took a
 ts_model_list[[i]] <- tripleStateModel
 
 }
+
+
+stopCluster(clust)   # you must stop the parallelization framework
 
 #model output
 ts_model_list[[5]]
@@ -364,7 +366,7 @@ data_list[[i]]$state <- viterbi(ts_model_list[[i]])
 }
 
 #save data
-saveRDS(data_list, "./Code output/allspp_greenup_GPSdata_triplestates.rds")
+saveRDS(data_list, "./Code output/allspp_seasonal_GPSdata_triplestates.rds")
 ```
 
 

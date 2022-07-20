@@ -1,0 +1,175 @@
+---
+title: "YNP Ungulate bayesian move states"
+author: "Molly Caldwell"
+date: "4/20/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(bayesmove)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+library(lubridate)
+library(furrr)
+```
+
+#Data prep
+
+```{r}
+#load data with movement parameters calculated
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+
+#split geometry to x y columns
+data <- data %>%
+    mutate(x = unlist(purrr::map(geometry,1)),
+           y = unlist(purrr::map(geometry,2)))
+
+data$date2 <- NULL
+
+#drop geometry column
+data$geometry <- NULL
+
+#rename id_yr_seas to id, dist to SL, and turn angle to TA for bayesmove package
+data <- data %>%
+  rename("id" = id_yr_seas, "SL" = dist, "TA" = rel.angle)
+
+#subset data for trial
+#reduce data to 2 random individuals per species
+spp <- unique(data$species)
+spp_sample <- list()
+for(i in 1:length(spp)){
+  data_spp <- data.frame(data) %>% dplyr::filter(species == spp[i])
+  samp <- sample(unique(data_spp$id), 2)
+  
+  spp_sample[[i]] <- data.frame(data) %>% filter(id %in% samp)
+}
+
+data <- rbind(spp_sample[[1]], spp_sample[[2]], spp_sample[[3]],
+                       spp_sample[[4]], spp_sample[[5]])
+```
+
+```{r}
+#round times and filter to given time step interval (~2 hours for fix rate)
+
+#look at step time interval distribution
+hist(data$dt/3600) #most are centered around 2 hour (7200 seconds)
+#we want to round observations to fix rate (7200 seconds), with a tolerance of 20 minutes (1200 seconds)
+data <- round_track_time(dat = data, id = "id", int = 7200, tol = 1200, time.zone = "MST", units = "secs")
+
+# How many different time intervals?
+n_distinct(data$dt)
+
+# How many observations of each time interval?
+hist(data$dt, main = "Rounded Time Intervals (s)")
+  ##most observations are falling within 2 hr period
+
+#create data list by species
+data_spp <- df_to_list(dat = data, ind = "species")
+
+#create listed data by id
+data_spp_id <- list()
+
+for(i in 1:length(data_spp)){
+data_list <- df_to_list(dat = data_spp[[i]], ind = "id")
+data_spp_id[[i]] <- data_list
+}
+
+#name listed data by species
+names(data_spp_id) <- unique(data$species)
+
+#filter observations to only intervals rounded at 2hr (7200s)
+#filtering out ~10,000 out of 1 mill. obs
+data_list_filt <- list()
+
+for(i in 1:length(data_spp_id)){
+data_list_filt[[i]] <- filter_time(dat.list = data_spp_id[[i]], int = 7200)
+}
+
+names(data_list_filt) <- names(data_spp_id)
+
+#check that only observations at 2hr intervals are retained (should only be 1 distinct dt per id)
+purrr::map(data_list_filt[[1]], ~n_distinct(.$dt))
+```
+
+#Define bins and limits of turn angles and step lengths to inform state models
+
+```{r}
+#visualize distribution of turn angles and step lengths by species
+for(i in 1:length(data_list_filt)){
+sl <- ggplot(bind_rows(data_list_filt[[i]]), aes(x = SL)) + 
+  geom_histogram() + 
+  ggtitle(paste(names(data_list_filt)[[i]], "step length", sep = " "))
+  
+ta <- ggplot(bind_rows(data_list_filt[[i]]), aes(x = TA)) + 
+  geom_histogram() + 
+  ggtitle(paste(names(data_list_filt)[[i]], "turn angle", sep = " "))
+
+print(sl)
+print(ta)
+
+}
+
+
+```
+
+
+```{r}
+# Define bin number and limits for turning angles by species
+angle.bin.lims = seq(from=-pi, to=pi, by=pi/4)  #8 bins
+
+# Define bin number and limits for step lengths
+dist.bin.lims = quantile(bind_rows(data_list_filt[[1]])$dist,
+                       c(0,0.25,0.50,0.75,0.90,1), na.rm=T)  #5 bins
+```
+
+#Segment movement states
+
+```{r}
+data_list <- data_list_filt[[1]]
+data_list <- data_list[c(1:2)]
+
+# Only retain id and discretized step length (SL) and turning angle (TA) columns
+data_list2 <- purrr::map(data_list,
+                   subset,
+                   select = c("id", "SL", "TA"))
+
+
+
+```
+
+```{r}
+set.seed(1)
+
+# Define hyperparameter for prior distribution
+alpha<- 1
+
+# Set number of iterations for the Gibbs sampler
+ngibbs<- 10000
+
+# Set the number of bins used to discretize each data stream
+nbins<- c(5,8)
+
+progressr::handlers(progressr::handler_progress(clear = FALSE))
+future::plan(multisession, workers = availableCores()-1)
+#run all MCMC chains in parallel
+library(bayesmove)
+
+dat.res<- segment_behavior(data = data_list2, ngibbs = ngibbs, nbins = nbins,
+                           alpha = alpha)
+
+future::plan(future::sequential)  #return to single core
+```
+
+
+
+
+
+
