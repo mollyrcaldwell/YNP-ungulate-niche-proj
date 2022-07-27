@@ -22,10 +22,7 @@ library(data.table)
 library(asnipe)
 library(igraph)
 library(circlize)
-<<<<<<< HEAD
-=======
 library(ComplexHeatmap)
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 library(ggplot2)
 library(GGally)
 library(network)
@@ -37,14 +34,10 @@ library(raster)
 library(rgdal)
 library(ggmap)
 library(geosphere)
-<<<<<<< HEAD
-
 # if (!requireNamespace("BiocManager", quietly=TRUE))
 #     install.packages("BiocManager")
 # BiocManager::install("ComplexHeatmap")
 library(ComplexHeatmap)
-=======
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 ```
 
 #Prep data
@@ -52,13 +45,6 @@ library(ComplexHeatmap)
 ```{r}
 #load seasonal gps data- all spp, 2 hr fixes
 data_all <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
-<<<<<<< HEAD
-
-#subset 2018 spring
-data_all <- data_all %>%
-  filter(yr == 2018 & season == "spring")
-=======
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 ```
 
 ```{r}
@@ -78,11 +64,7 @@ data_dt <- setDT(data_xy)
 
 ```
 
-<<<<<<< HEAD
-#Spatial network- by points (100 m, within 12 hours)
-=======
 #Spatial network- by points (100 m, within x hours)
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 
 ##Temporal grouping
 

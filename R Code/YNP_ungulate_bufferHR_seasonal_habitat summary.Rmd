@@ -392,7 +392,7 @@ buffHR_spr$variable <- factor(buffHR_spr$variable, levels = c("Elevation (m)",
 ggplot(buffHR_spr, aes(x = value, y = species, fill = species)) +
   geom_density_ridges() +
   scale_fill_manual(values = c("#D55E00", "#E69F00", "#0072B2", "#009E73", "#CC79A7")) +
-  facet_wrap(~variable, scales = "free", nrow = 5) + 
+  facet_wrap(~variable, scales = "free", nrow = 5) +
   theme(legend.position = "none") +
   xlab("Average value per individual home ranges") +
   ylab("") +
