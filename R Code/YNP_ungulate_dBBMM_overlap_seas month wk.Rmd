@@ -1,0 +1,195 @@
+---
+title: "YNP ungulate BBMM HR overlap: week, month, season"
+author: "Molly Caldwell"
+date: "2022-08-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(parallel)
+library(maptools)
+library(scales)
+library(ggpubr)
+library(maptools)
+```
+
+#Seasonal overlap
+##Kernel overlap (%overlap) of each DBBM
+
+```{r}
+#load each individual's bbmm raster from file
+file_list <- list.files(path = "./Code output/dBBMM_UDs/season/", pattern = ".tif$",
+                        full.names = TRUE)
+
+name_list <- list.files(path = "./Code output/dBBMM_UDs/season/", pattern = ".tif$",
+                        full.names = FALSE)
+
+name_list <- sub("BBdyn_seas_", "", name_list)
+name_list <- sub(".tiff*", "", name_list)
+
+bb_rast_list <- list()
+for(i in 1:length(file_list)){
+  bb_rast_list[[i]] <- raster(file_list[[i]])
+}
+
+names(bb_rast_list) <- name_list
+
+bb_stack <- stack(file_list)
+
+```
+
+```{r}
+library(amt)
+rl <- bb_rast_list[1:3]
+t <- hr_overlap(rl, type = "ba", which = "all")
+```
+
+
+```{r}
+#convert each individual's raster BBMM to combined spatial points data frame
+sp_all <- do.call(rbind.SpatialPointsDataFrame,lapply(bb_rast_list, function(z){
+    tmp <- rasterToPoints(z, spatial = TRUE)
+    nm <- names(tmp@data)
+    names(tmp@data) <- "vol"
+    tmp@data$cid <- sub("BBdyn_seas_", "", nm)
+    tmp@data$seas_yr <- str_extract(nm, "\\d{4}_\\w{1,}")
+   tmp <- tmp[which(tmp$vol !=0),]
+    return(tmp)
+ }))
+
+
+#save data
+saveRDS(sp_all, "./Code output/dBBMM_UDs/allindiv_seas_dbbm_spatpts_df.rds")
+```
+
+```{r}
+ sp_all_data <- do.call(rbind.SpatialPointsDataFrame, lapply(bb_rast_list[1:10], function(z){
+    tmp <- rasterToPoints(z)
+    tmp <- as.data.frame(tmp)
+    nm <- names(tmp)[3]
+    names(tmp) <- c("x", "y", "vol")
+    tmp$cid <- sub("BBdyn_seas_", "", nm)
+    tmp$seas_yr <- str_extract(nm, "\\d{4}_\\w{1,}")
+    tmp <- tmp[which(tmp$vol !=0),]
+    return(tmp)
+ }))
+
+sp_sp <- SpatialPointsDataFrame(coords = sp_coords[,1:2], data = as.data.frame(sp_coords),
+                               proj4string = CRS("+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs"))
+```
+
+
+```{r}
+#load saved data
+sp_all <- readRDS("./Code output/dBBMM_UDs/allindiv_seas_dbbm_spatpts_df.rds")
+
+#loop per season_yr
+u_seasyr <- unique(sp_nz@data$seas_yr)
+
+HR_ol_comb<- data.frame(id1 = "NA", id2 = "NA", prop_overlap = 0,
+                    spp1 = "NA", spp2 = "NA", overlap_type = "NA",
+                    overlap_ids = "NA", seas_yr = "NA")
+
+for(i in 1:length(u_seasyr)){
+#calculate pairwise overlap of each HR per season
+sp_sub <- sp_nz[which(sp_nz$seas_yr == u_seasyr[i]), ]
+
+HR_ol <- kerneloverlap(sp_sub[,2], method = c("BA"), percent = 95, conditional = FALSE)
+
+#reformat pairwise matrix to data frame and add species
+library(reshape)
+HRol_df <- melt(HR_ol)
+
+HRol_df <- HRol_df %>%
+ dplyr::rename("id1" = X1, "id2" = X2) %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(value = as.numeric(value)) %>%
+ dplyr::rename("prop_overlap" = value) %>%
+  #add overlap type as alphabetic order of combined species name
+  mutate(overlap_type = if_else(spp1 < spp2, paste(spp1, spp2, sep = "-"),
+                        if_else(spp2 < spp1, paste(spp2, spp1, sep = "-"),
+                        if_else(spp2 == spp1, paste(spp1, spp2, sep = "-"), 
+                                "NA")))) %>%
+  mutate(id1 = as.character(id1)) %>%
+  mutate(id2 = as.character(id2)) %>%
+  #add combined cids variable
+  mutate(overlap_ids = if_else(id1 < id2, paste(id1, id2, sep = "-"),
+                        if_else(id2 < id1, paste(id2, id1, sep = "-"),
+                         if_else(id2 == id1, paste(id2, id1, sep = "-"), 
+                                 "NA")))) %>%
+  #remove combos of same ids
+  filter(id1 != id2) %>%
+  #set prop ol >1 to 1 
+  mutate(prop_overlap = if_else(prop_overlap > 1, 1, prop_overlap)) %>%
+  mutate(seas_yr = u_seasyr[i])
+
+
+HR_ol <- bind_rows(HR_ol_comb, HRol_df)
+}
+
+#save data frame as csv
+write.csv(HRol_df, "./Code data output/bbdm_HR_overlap_2020_11.24.2021.csv")
+```
+
+
+```{r}
+library(plotrix)
+#graph mean and sd overlap proportion by overlap type
+avg_ol_summ <- HRol_df %>%
+  group_by(overlap_type) %>%
+  summarize(mean_prop_overlap = mean(prop_overlap), 
+            sd_prop_overlap = sd(prop_overlap),
+            se_prop_overlap = std.error(prop_overlap), .groups = "keep")
+
+#save data frame as csv
+write.csv(avg_ol_summ, "./Code data output/bbdm_HR_overlap_mean and sd_2020_11.24.2021.csv")
+
+#read csv if running later
+avg_ol_summ <- read.csv("./Code data output/bbdm_HR_overlap_mean and sd_2020_11.24.2021.csv")
+
+#order from highest to lowest mean overlap
+avg_ol_summ <- avg_ol_summ %>%
+  arrange(mean_prop_overlap)
+
+#set overlap type as factor with levels in order of highest to lowest mean overlap
+ord <- avg_ol_summ$overlap_type
+avg_ol_summ$overlap_type <- factor(avg_ol_summ$overlap_type, levels = ord)
+
+#graph
+av_ol_g <- ggplot(avg_ol_summ, aes(x = overlap_type, y = mean_prop_overlap, 
+                        color = overlap_type)) +
+  geom_errorbar(aes(ymin = (mean_prop_overlap - se_prop_overlap), 
+                    ymax = (mean_prop_overlap + se_prop_overlap)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  xlab("Overlap species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Home Range Overlap") +
+  theme(legend.position = "none")
+
+av_ol_g + ggpubr::rotate()
+```

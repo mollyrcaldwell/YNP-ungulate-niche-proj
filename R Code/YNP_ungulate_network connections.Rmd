@@ -76,8 +76,8 @@ g_data <- group_times(DT = data_dt, datetime = 'date', threshold = "12 hours") #
 ##Spatial grouping (points)
 
 ```{r}
-#spatial group (by GPS points) with threshold 100 meters
-group_pts(DT = g_data, threshold = 100, id = 'cid', 
+#spatial group (by GPS points) with threshold 200 meters
+group_pts(DT = g_data, threshold = 200, id = 'cid', 
                         coords = c('x', 'y'), timegroup = 'timegroup') #threshold units based on GPS data CRS
 ```
 

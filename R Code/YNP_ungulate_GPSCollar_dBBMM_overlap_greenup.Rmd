@@ -93,7 +93,7 @@ DynBB <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
   # prep data for the dBB function
   mov <- move(x=st_coordinates(temp)[,1], y=st_coordinates(temp)[,2], time=temp$date,
               animal=ids[i], proj=CRS(st_crs(temp)$proj4string))   #create mov object
-  mov <- burst(mov, temp$connect[1:(nrow(temp)-1)])   #this identifies the bad points (ie > than your MaxFixInterval)
+  mov <- burst(mov, c(1:(nrow(temp)-1)))   #this identifies the bad points (ie > than your MaxFixInterval)
   
   # this is the function to calculate the dynamics BB
   Dbb <- try(brownian.bridge.dyn(mov,

@@ -1,0 +1,348 @@
+---
+title: "YNP Ungulate dBBMM daily, weekly, monthly, seasonally"
+author: "Molly Caldwell"
+date: "2022-08-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(rgeos)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(parallel)
+```
+
+#Prep Data
+
+```{r}
+#load seasonal gps data- all spp, 2 hr fixes
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+```
+
+#Dynamic brownian bridge movement models
+
+```{r}
+#first, create raster/grid to calculate all UDs over
+ext <- extent(data)
+multiplyers <- c((ext[2]-ext[1])*0.3, (ext[4]-ext[3])*0.3)   # add about 30% around the edges of your extent (you can adjust this if necessary)
+ext <- extend(ext, multiplyers)
+grd <- raster(ext)
+res(grd) <- 250     #i'm using a 250m resolution here. Might want to increase this if things are going slowly. Or decrease it if you want more precision
+ncell(grd)     # my grid has 867900 cells at 250m resolution
+projection(grd) <- st_crs(data)$proj4string
+rm(multiplyers)
+
+#plot your grid
+plot(extent(grd))   # this is the bounding box of your grid
+plot(sample_n(data[,"cid"],1000), add=TRUE)   # add a sample of your points
+```
+
+##Seasonal (by id_year_season)
+
+```{r}
+# verify your folder to write your BBs to is what you want!
+fldr <- "./Code output/dBBMM_UDs/season/"
+dir(fldr)   # There shouldn't be any .tif files with dynBB... if so, you might want to delete them.
+
+ids <- unique(data$id_yr_seas) #loop over ids
+
+data <- data %>% # order data
+  arrange(id_yr_seas, date)
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data","fldr","ids","grd"))
+
+# now for the actual loop
+DynBB <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
+   
+  # DynBB <- do.call(rbind, lapply(1:length(ids), function(i){   # may need this line to troubleshoot inside the parrellel loop
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  library(sf)
+  
+  temp <- data[data$id_yr_seas==ids[i],]  # grab the data for the id of interest
+
+  # prep data for the dBB function
+  mov <- move(x=st_coordinates(temp)[,1], y=st_coordinates(temp)[,2], time=temp$date,
+              animal=ids[i], proj=CRS(st_crs(temp)$proj4string))   #create mov object
+  
+  # this is the function to calculate the dynamics BB
+  Dbb <- try(brownian.bridge.dyn(mov,
+                                 location.error=20, #this is the location error of your collars
+                                 raster=grd,
+                                 margin=11,    # margin and window.size are params of the dynBB. I have put the defaults
+                                 window.size=31,
+                                 verbose=FALSE), 
+             silent=TRUE)
+  
+  #write out results to file too, so if there is an error you don't loose all your work!
+  if(class(Dbb)=="try-error"){  # if teh dBB failed
+    return(data.frame(id_yr_seas=ids[i], Failed=TRUE, FirstError=Dbb[1]))   #return an NA so you know there was an error
+  }else{  # if the dBB was a success
+    rast <- Dbb[[1]]
+    writeRaster(rast, filename = paste0(fldr, "/BBdyn_seas_", ids[i],".tif"), format="GTiff", overwrite=T)
+    return(data.frame(id_yr_seas=ids[i], Failed=FALSE, FirstError="None"))    # have it return the motion variance
+  }
+
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+head(DynBB)
+# were there any BBs that didn't work?
+table(DynBB$Failed)  #if any of these are TRUE, then YES
+
+
+# some code to look at your dynamic BBs
+# whichID <- sample(ids, 1)    #choose an ID to look at
+# rast <- raster(paste0(fldr, "/BBdyn_", whichID,".tif"))
+# sum(values(rast))    #these will sum to 1, because it is a probability
+# rast <- getVolumeUD(as(rast, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+# plot(rast, xlim=extent(data[data$id_yr_seas == whichID,])[1:2]+c(-1000,1000),
+#      ylim=extent(data[data$id_yr_seas == whichID,])[3:4]+c(-1000,1000))
+# plot(data[data$id_yr_seas == whichID,"id_yr_seas"], add=T, pch=".", col="black")
+```
+
+##Monthly (by id_year_month)
+
+```{r}
+#add month and id_yr_month variables to data
+data <- data %>%
+  mutate(month = month(date)) %>%
+  mutate(id_yr_month = paste(cid, yr, month, sep = "_"))
+```
+
+```{r}
+# verify your folder to write your BBs to is what you want!
+fldr <- "./Code output/dBBMM_UDs/month/"
+dir(fldr)   # There shouldn't be any .tif files with dynBB... if so, you might want to delete them.
+
+ids <- unique(data$id_yr_month) #loop over ids
+
+data <- data %>% # order data
+  arrange(id_yr_month, date)
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data","fldr","ids","grd"))
+
+# now for the actual loop
+DynBB <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
+   
+  # DynBB <- do.call(rbind, lapply(1:length(ids), function(i){   # may need this line to troubleshoot inside the parrellel loop
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  library(sf)
+  
+  temp <- data[data$id_yr_month==ids[i],]  # grab the data for the id of interest
+
+   # prep data for the dBB function
+  mov <- move(x=st_coordinates(temp)[,1], y=st_coordinates(temp)[,2], time=temp$date,
+              animal=ids[i], proj=CRS(st_crs(temp)$proj4string))   #create mov object
+  
+  # this is the function to calculate the dynamics BB
+  Dbb <- try(brownian.bridge.dyn(mov,
+                                 location.error=20, #this is the location error of your collars
+                                 raster=grd,
+                                 margin=11,    # margin and window.size are params of the dynBB. I have put the defaults
+                                 window.size=31,
+                                 verbose=FALSE), 
+             silent=TRUE)
+  
+  #write out results to file too, so if there is an error you don't loose all your work!
+  if(class(Dbb)=="try-error"){  # if teh dBB failed
+    return(data.frame(id_yr_month=ids[i], Failed=TRUE, FirstError=Dbb[1]))   #return an NA so you know there was an error
+  }else{  # if the dBB was a success
+    rast <- Dbb[[1]]
+    writeRaster(rast, filename = paste0(fldr, "/BBdyn_month_", ids[i],".tif"), format="GTiff", overwrite=T)
+    return(data.frame(id_yr_month=ids[i], Failed=FALSE, FirstError="None"))    # have it return the motion variance
+  }
+
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+head(DynBB)
+# were there any BBs that didn't work?
+table(DynBB$Failed)  #if any of these are TRUE, then YES
+
+
+# some code to look at your dynamic BBs
+# whichID <- sample(ids, 1)    #choose an ID to look at
+# rast <- raster(paste0(fldr, "/BBdyn_", whichID,".tif"))
+# sum(values(rast))    #these will sum to 1, because it is a probability
+# rast <- getVolumeUD(as(rast, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+# plot(rast, xlim=extent(data[data$id_yr_seas == whichID,])[1:2]+c(-1000,1000),
+#      ylim=extent(data[data$id_yr_seas == whichID,])[3:4]+c(-1000,1000))
+# plot(data[data$id_yr_seas == whichID,"id_yr_seas"], add=T, pch=".", col="black")
+```
+
+
+##Weekly (by id_year_week)
+
+```{r}
+#add week and id_yr_week variables to data
+data <- data %>%
+  mutate(week = week(date)) %>%
+  mutate(id_yr_week = paste(cid, yr, week, sep = "_"))
+```
+
+```{r}
+# verify your folder to write your BBs to is what you want!
+fldr <- "./Code output/dBBMM_UDs/week/"
+dir(fldr)   # There shouldn't be any .tif files with dynBB... if so, you might want to delete them.
+
+ids <- unique(data$id_yr_week) #loop over ids
+
+data <- data %>% # order data
+  arrange(id_yr_week, date)
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data","fldr","ids","grd"))
+
+# now for the actual loop
+DynBB <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
+   
+  # DynBB <- do.call(rbind, lapply(1:length(ids), function(i){   # may need this line to troubleshoot inside the parrellel loop
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  library(sf)
+  
+  temp <- data[data$id_yr_week==ids[i],]  # grab the data for the id of interest
+
+    # prep data for the dBB function
+  mov <- move(x=st_coordinates(temp)[,1], y=st_coordinates(temp)[,2], time=temp$date,
+              animal=ids[i], proj=CRS(st_crs(temp)$proj4string))   #create mov object
+  
+  # this is the function to calculate the dynamics BB
+  Dbb <- try(brownian.bridge.dyn(mov,
+                                 location.error=20, #this is the location error of your collars
+                                 raster=grd,
+                                 margin=5,    # margin and window.size are params of the dynBB. I have put the defaults
+                                 window.size=21,
+                                 verbose=FALSE), 
+             silent=TRUE)
+  
+  #write out results to file too, so if there is an error you don't loose all your work!
+ if(class(Dbb)=="try-error"){  # if teh dBB failed
+    return(data.frame(id_yr_week=ids[i], Failed=TRUE, FirstError=Dbb[1]))   #return an NA so you know there was an error
+  }else{  # if the dBB was a success
+    rast <- Dbb[[1]]
+    writeRaster(rast, filename = paste0(fldr, "/BBdyn_week_", ids[i],".tif"), format="GTiff", overwrite=T)
+    return(data.frame(id_yr_week=ids[i], Failed=FALSE, FirstError="None"))    # have it return the motion variance
+  }
+
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+head(DynBB)
+# were there any BBs that didn't work?
+table(DynBB$Failed)  #if any of these are TRUE, then YES
+
+
+# some code to look at your dynamic BBs
+whichID <- sample(ids, 1)    #choose an ID to look at
+rast <- raster(paste0(fldr, "BBdyn_week_", whichID,".tif"))
+sum(values(rast))    #these will sum to 1, because it is a probability
+rast <- getVolumeUD(as(rast, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+plot(rast, xlim=extent(data[data$id_yr_week == whichID,])[1:2]+c(-1000,1000),
+     ylim=extent(data[data$id_yr_week == whichID,])[3:4]+c(-1000,1000))
+plot(data[data$id_yr_week == whichID,"id_yr_week"], add=T, pch=".", col="black")
+```
+
+##Daily (by id_year_day)
+
+```{r}
+#add day and id_yr_day variables to data
+data <- data %>%
+  mutate(day = yday(date)) %>%
+  mutate(id_yr_day = paste(cid, yr, day, sep = "_"))
+```
+
+```{r}
+# verify your folder to write your BBs to is what you want!
+fldr <- "./Code output/dBBMM_UDs/day/"
+dir(fldr)   # There shouldn't be any .tif files with dynBB... if so, you might want to delete them.
+
+ids <- unique(data$id_yr_day) #loop over ids
+
+data <- data %>% # order data
+  arrange(id_yr_day, date)
+
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("data","fldr","ids","grd"))
+
+# now for the actual loop
+DynBB <- do.call(rbind, clusterApplyLB(clust, 1:length(ids), function(i){
+   
+  # DynBB <- do.call(rbind, lapply(1:length(ids), function(i){   # may need this line to troubleshoot inside the parrellel loop
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  library(sf)
+  
+  temp <- data[data$id_yr_day==ids[i],]  # grab the data for the id of interest
+
+  # prep data for the dBB function
+  mov <- move(x=st_coordinates(temp)[,1], y=st_coordinates(temp)[,2], time=temp$date,
+              animal=ids[i], proj=CRS(st_crs(temp)$proj4string))   #create mov 
+  
+  # this is the function to calculate the dynamics BB
+  Dbb <- try(brownian.bridge.dyn(mov,
+                                 location.error=20, #this is the location error of your collars
+                                 raster=grd,
+                                 margin=3,    # margin and window.size are params of the dynBB. I have put the defaults
+                                 window.size=9,
+                                 verbose=FALSE), 
+             silent=TRUE)
+  
+  #write out results to file too, so if there is an error you don't loose all your work!
+  if(class(Dbb)=="try-error"){  # if teh dBB failed
+    return(data.frame(id_yr_day=ids[i], Failed=TRUE, FirstError=Dbb[1]))   #return an NA so you know there was an error
+  }else{  # if the dBB was a success
+    rast <- Dbb[[1]]
+    writeRaster(rast, filename = paste0(fldr, "/BBdyn_day_", ids[i],".tif"), format="GTiff", overwrite=T)
+    return(data.frame(id_yr_day=ids[i], Failed=FALSE, FirstError="None"))    # have it return the motion variance
+  }
+
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+head(DynBB)
+# were there any BBs that didn't work?
+table(DynBB$Failed)  #if any of these are TRUE, then YES
+
+
+# some code to look at your dynamic BBs
+# whichID <- sample(ids, 1)    #choose an ID to look at
+# rast <- raster(paste0(fldr, "/BBdyn_", whichID,".tif"))
+# sum(values(rast))    #these will sum to 1, because it is a probability
+# rast <- getVolumeUD(as(rast, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+# plot(rast, xlim=extent(data[data$id_yr_seas == whichID,])[1:2]+c(-1000,1000),
+#      ylim=extent(data[data$id_yr_seas == whichID,])[3:4]+c(-1000,1000))
+# plot(data[data$id_yr_seas == whichID,"id_yr_seas"], add=T, pch=".", col="black")
+```
