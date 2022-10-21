@@ -1,0 +1,140 @@
+---
+title: "YNP ungulate BBMM HR overlap: season"
+author: "Molly Caldwell"
+date: "2022-08-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(parallel)
+library(maptools)
+library(scales)
+library(ggpubr)
+library(maptools)
+```
+
+#Seasonal overlap
+##Kernel overlap (%overlap) of each DBBM
+
+```{r}
+#load each individual's bbmm raster from file (all bbmm rasters were saved in same folder from Jerod's HR code)
+file_list <- list.files(path = "./Code output/dBBMM_UDs/season/", pattern = ".tif$",
+                        full.names = TRUE)
+
+name_list <- list.files(path = "./Code output/dBBMM_UDs/season/", pattern = ".tif$",
+                        full.names = FALSE)
+
+#separate out just the collar id, year, and season from the file name
+name_list <- sub("BBdyn_seas_", "", name_list)
+name_list <- sub(".tiff*", "", name_list)
+
+bb_rast_list <- list()
+for(i in 1:length(file_list)){
+  bb_rast_list[[i]] <- raster(file_list[[i]])
+}
+
+names(bb_rast_list) <- name_list #name the raster list by collar id_season_year
+
+```
+
+
+
+```{r}
+#convert each individual's raster BBMM to combined spatial points data frame
+sp_all <- do.call(rbind.SpatialPointsDataFrame,lapply(bb_rast_list, function(z){
+    tmp <- rasterToPoints(z, spatial = TRUE)
+    nm <- names(tmp@data) #pull out the id_season_yr
+    names(tmp@data) <- "vol" #rename to volume for later overlap functions
+    tmp@data$cid <- sub("BBdyn_seas_", "", nm) #add in collar id_seas_yr
+    tmp@data$seas_yr <- str_extract(nm, "\\d{4}_\\w{1,}") #pull out seas_yr to separate variable
+   tmp <- tmp[which(tmp$vol !=0),] #filter out only raster points that have >0 values
+    return(tmp)
+ }))
+
+
+#save data
+saveRDS(sp_all, "./Code output/dBBMM_UDs/allindiv_seas_dbbm_spatpts_df.rds")
+```
+
+```{r}
+#load saved data
+sp_all <- readRDS("./Code output/dBBMM_UDs/allindiv_seas_dbbm_spatpts_df.rds")
+
+#loop per season_yr
+u_seasyr <- unique(sp_all@data$seas_yr) #create variable of unique seas_yrs to loop by
+#want to loop by season_yr so that we are only calculating overlap between individual's HRs that are during the same seas_yr
+
+HR_ol_comb <- data.frame(id1 = "NA", id2 = "NA", prop_overlap = 0,
+                    spp1 = "NA", spp2 = "NA", overlap_type = "NA",
+                    overlap_ids = "NA", seas_yr = "NA") #create fake data frame to add to in loop
+
+for(i in 1:length(u_seasyr)){
+  print(i)
+
+  #separate out data that matches seas_yr
+sp_sub <- sp_all[which(sp_all$seas_yr == u_seasyr[i]), ]
+
+#calculate pairwise overlap of each HR per season
+#can set method to whichever best fits your purposes, documentation in kerneloverlap function help
+HR_ol <- kerneloverlap(sp_sub[,2], method = c("BA"), percent = 95, conditional = FALSE)
+
+#reformat pairwise matrix to data frame and add species
+#This section helps create a clean way to summarize by species but can also just take out the species part and only use ids
+library(reshape)
+HRol_df <- melt(HR_ol)
+
+HRol_df <- HRol_df %>%
+ dplyr::rename("id1" = X1, "id2" = X2) %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(value = as.numeric(value)) %>%
+ dplyr::rename("prop_overlap" = value) %>%
+  #add overlap type as alphabetic order of combined species name
+  mutate(overlap_type = if_else(spp1 < spp2, paste(spp1, spp2, sep = "-"),
+                        if_else(spp2 < spp1, paste(spp2, spp1, sep = "-"),
+                        if_else(spp2 == spp1, paste(spp1, spp2, sep = "-"), 
+                                "NA")))) %>%
+  mutate(id1 = as.character(id1)) %>%
+  mutate(id2 = as.character(id2)) %>%
+  #add combined cids variable
+  mutate(overlap_ids = if_else(id1 < id2, paste(id1, id2, sep = "-"),
+                        if_else(id2 < id1, paste(id2, id1, sep = "-"),
+                         if_else(id2 == id1, paste(id2, id1, sep = "-"), 
+                                 "NA")))) %>%
+  #remove combos of same ids
+  filter(id1 != id2) %>%
+  #set prop ol >1 to 1 
+  mutate(prop_overlap = if_else(prop_overlap > 1, 1, prop_overlap)) %>%
+  mutate(seas_yr = u_seasyr[i])
+
+
+HR_ol_comb <- bind_rows(HR_ol_comb, HRol_df)
+}
+#remove na row from data
+HR_ol_comb <- HR_ol_comb %>% filter(id1 != "NA")
+
+#save data frame as csv
+write.csv(HRol_df, "./Code output/dBBMM_UDs/dbbdm_allHR_overlap_seas_yr_8.31.22.csv")
+```

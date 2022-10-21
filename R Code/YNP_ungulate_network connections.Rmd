@@ -151,10 +151,7 @@ title = "Species",
 type = "point",                 
 background = unique(grid.col))
 
-<<<<<<< HEAD
 #plot chord diagram
-=======
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 plot.new()
 chordDiagram(net_pts, grid.col = grid.col, scale = TRUE, annotationTrack = "grid",
              annotationTrackHeight = c(0.03, 0.01))
@@ -230,7 +227,7 @@ conn_cid <- conn_cid %>%
 
 
 #create basemap of study area
-<<<<<<< HEAD
+
   #ynp <- get_googlemap(center = c(lon = -110.50, lat = 44.9), zoom = 10, 
                     # maptype = "hybrid")
   #^not working since google update with access key needed...
@@ -243,7 +240,7 @@ conn_cid <- conn_cid %>%
 # ext <- st_make_grid(st_bbox(data_all), n = 1) #create extent based on gps data
 # 
 # base_map <- basemap_ggplot(ext) + labs(x = "Longitude", y = "Latitude")
-=======
+
   ynp <- get_googlemap(center = c(lon = -110.50, lat = 44.9), zoom = 10, 
                      maptype = "hybrid")
 library(basemaps)
@@ -264,7 +261,6 @@ base_map <- basemap_ggplot(ext) + labs(x = "Longitude", y = "Latitude")
 #                            n=1000, addStartEnd=TRUE )
 #     
 # }
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 
 
 #add lat and lon to cid connections to create arcs (x,y and xend,yend)
@@ -298,13 +294,10 @@ conn_cid_xy <- left_join(conn_cid_xy, nodes_xy, by = c("target" = "vertex.names"
     mutate(perc_diff = if_else(is.na(perc_diff), 0, perc_diff)) %>%
     rename("Percent interspecific connections" = perc_diff)
   
-<<<<<<< HEAD
-#map  nodes and connection lines- add basemap once that's working again
-  ggplot() + 
-=======
+
+
 #map basemap, nodes, and connection lines
 ggplot() +
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
   geom_curve(data = conn_cid_xy, aes(x = lat.x, y = lon.x, xend = lat.y, 
                                      yend = lon.y, color = species.x),
                       curvature = 0.1, angle = 90, alpha = 0.4, size = 1,
@@ -483,16 +476,8 @@ grid.draw(g1)
 ```
 
 
-
-<<<<<<< HEAD
 ####1hr- same code as above, 1hr time threshold
 #Spatial network- by points (100 m, within 1 hours)
-=======
-
-
-####1hr
-#Spatial network- by points (100 m, within x hours)
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 
 ##Temporal grouping
 

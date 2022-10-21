@@ -5,6 +5,7 @@ date: "3/3/2022"
 output: html_document
 ---
 
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, error = FALSE)
 knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
@@ -21,6 +22,11 @@ library(lubridate)
 ```
 
 #Load data
+GPS data: cleaned GPS data of 5 YNP ungulate species combined
+  -bison, bighorn, and mule deer have 2 hour fixes
+  -elk (1-hr fixes) and pronghorn (4-hr fixes) sampled to 2 hour fixes
+  
+Defined polygon 50 km around all GPS data for cropping the raster environmental data.
 
 ```{r}
 #load all spp GPS collar data, all years/seasons
@@ -39,6 +45,10 @@ st_crs(studyareapoly) <- st_crs(gps_data)   # set the projection
 ```
 
 #NDVI/brown down peak dates
+
+Use the NDVI SE fit from Jerod's GIS folder to create rasters that represent
+spring start of greenup, the max NDVI date, the mean peak NDVI date, and
+the mean peak brown down date across the study area.
 
 ```{r}
 # bring in SE of the fit
@@ -136,6 +146,14 @@ r <- stack("Z:/MODIS_NDVI/Bischof_calculations/dlcparams.grd")
 ```
 
 #Snow phenology
+
+Use SNODAS snow depth rasters across study area to calculate snow on and snow 
+off dates (date there is snow or no snow at pixel for 8 consecutive days). 
+This uses source code (CalcSnowOn and CalcSnowOff) from Jerod.
+
+Download_SNODAS function from Jerod stopped working 8/2022. Seems like an 
+issue with how the rasters are stacked- maybe an rgeos thing?? Still needs
+to be fixed.
 
 ```{r}
 #download snow depth for August-December 2021 (not on GIS drive)
@@ -263,6 +281,12 @@ The season start/end for the study area per year were calculated as the date whe
   Summer: start - max NDVI peak, end- max peak brown down
   Fall: start- max peak brown down, end- snow on
   Winter: start- snow on, end- snow off
+  
+
+The 60% came from testing values from 50% to 90% of the pixels to determine which
+cutoffs matched the seasonality of the Yellowstone ecosystem on average. Percentages
+higher than 60% were biased by slow snow melt at highest elevations, with spring
+start dates being set to after June.
   
 
 ```{r}

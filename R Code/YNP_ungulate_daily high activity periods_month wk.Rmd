@@ -1,0 +1,33 @@
+---
+title: "YNP ungulates: average daily times of highest movement rates by week, month"
+author: "Molly Caldwell"
+date: "2022-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(tidyverse)
+library(lubridate)
+```
+
+```{r}
+#load GPS data with movement parameters calculated for all species
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+```
+
+#Weekly time periods of high movement rates
+Times that movements were within the top quantile of movement rates per day averaged per week.
+
+```{r}
+#add week to data
+
+```
+
+

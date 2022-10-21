@@ -1,0 +1,303 @@
+---
+title: "YNP ungulate individual fidelity BBMM HR overlap: season, month, week"
+author: "Molly Caldwell"
+date: "2022-10-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(parallel)
+library(maptools)
+library(scales)
+library(ggpubr)
+library(maptools)
+library(reshape)
+```
+
+#Seasonal overlap
+##Kernel overlap (%overlap) of each DBBM
+
+```{r}
+#load each individual's spat pts ddmms seasonal
+sp_all <- readRDS("./Code output/dBBMM_UDs/allindiv_seas_dbbm_spatpts_df.rds")
+
+#create id only data variable (no season or year)
+sp_all@data <- sp_all@data %>%
+  group_by(cid) %>%
+  mutate(id = str_split(cid, "_")[[1]][1])
+
+#loop per individual
+u_id <- unique(sp_all@data$id) #create variable of unique id (without seas_year) to loop by
+#want to loop by id so that we are only calculating overlap between the same individual's HRs that are across different seas_yr
+
+#create fake data frame to add to in loop
+HR_ol_comb <- data.frame(id = "NA", id_yr_seas1 = "NA", id_yr_seas2 = "NA", 
+                         spp = "NA", seas1 = "NA", seas2 = "NA", yr1 = "NA", 
+                         yr2 = "NA", prop_overlap = 0) 
+
+for(i in 1:length(u_id)){
+  print(i)
+
+  #separate out data that matches id
+sp_sub <- sp_all[which(sp_all$id == u_id[i]), ]
+
+#only do  overlap evaluation if there is more than one seas_yr for id
+if(length(unique(sp_sub$seas_yr)) > 1){
+
+#calculate pairwise overlap of each HR per season
+#can set method to whichever best fits your purposes, documentation in kerneloverlap function help
+HR_ol <- kerneloverlap(sp_sub[,2], method = c("BA"), percent = 95, conditional = FALSE)
+
+#reformat pairwise matrix to data frame and add species
+#This section helps create a clean way to summarize by species but can also just take out the species part and only use ids
+HRol_df <- melt(HR_ol)
+
+HRol_df <- HRol_df %>%
+ dplyr::rename("id_yr_seas1" = X1, "id_yr_seas2" = X2) %>%
+  mutate(spp = if_else(grepl("BI", id_yr_seas1), "bison",
+                if_else(grepl("BH", id_yr_seas1), "bighorn",
+                if_else(grepl("MD", id_yr_seas1), "deer",
+                if_else(grepl("EL", id_yr_seas1), "elk",
+                if_else(grepl("PR", id_yr_seas1), "pronghorn", "NA")))))) %>%
+  mutate(value = as.numeric(value)) %>%
+ dplyr::rename("prop_overlap" = value) %>%
+  mutate(id_yr_seas1 = as.character(id_yr_seas1)) %>%
+  mutate(id_yr_seas2 = as.character(id_yr_seas2)) %>%
+  #remove combos of same ids
+  filter(id_yr_seas1 != id_yr_seas2) %>%
+  #set prop ol >1 to 1 
+  mutate(prop_overlap = if_else(prop_overlap > 1, 1, prop_overlap)) %>%
+  #add seasons and years
+  group_by(id_yr_seas1) %>%
+  mutate(seas1 = str_split(id_yr_seas1, "_")[[1]][3]) %>%
+  mutate(yr1 = str_split(id_yr_seas1, "_")[[1]][2]) %>%
+  ungroup() %>%
+  group_by(id_yr_seas2) %>%
+  mutate(seas2 = str_split(id_yr_seas2, "_")[[1]][3]) %>%
+  mutate(yr2 = str_split(id_yr_seas2, "_")[[1]][2]) %>%
+  #add id with no seas_yr
+  mutate(id = u_id[i])
+
+
+HR_ol_comb <- bind_rows(HR_ol_comb, HRol_df)
+}
+}
+
+#remove na row from data
+HR_ol_comb <- HR_ol_comb %>% filter(id1 != "NA")
+
+#save data frame as csv
+write.csv(HR_ol_comb, "./Code output/dBBMM_UDs/dbbdm_indiv_fidelity_HR_overlap_seas_yr_10.16.22.csv")
+```
+
+#Monthly overlap
+##Kernel overlap (%overlap) of each DBBM
+
+```{r}
+#load saved data
+sp_all <- readRDS("./Code output/dBBMM_UDs/allindiv_month_dbbm_spatpts_df.rds")
+
+#create id only data variable (no season or year)
+sp_all@data <- sp_all@data %>%
+  group_by(cid) %>%
+  mutate(id = str_split(cid, "_")[[1]][1])
+
+#loop per individual
+u_id <- unique(sp_all@data$id) #create variable of unique id (without seas_year) to loop by
+#want to loop by id so that we are only calculating overlap between the same individual's HRs that are across different seas_yr
+
+#create fake data frame to add to in loop
+HR_ol_comb <- data.frame(id = "NA", id_yr_month1 = "NA", id_yr_month2 = "NA", 
+                         spp = "NA", month1 = "NA", month2 = "NA", yr1 = "NA", 
+                         yr2 = "NA", prop_overlap = 0) 
+
+for(i in 1:length(u_id)){
+  print(i)
+
+  #separate out data that matches id
+sp_sub <- sp_all[which(sp_all$id == u_id[i]), ]
+
+#remove any months with less than 5 locations
+num_loc <- sp_sub@data %>%
+  group_by(month_yr) %>%
+  tally() #create data with month_yr and number of locations
+
+sp_sub@data <- left_join(sp_sub@data, num_loc, by = "month_yr") #join number of locations data with spatial data frame
+
+sp_sub <- sp_sub[which(sp_sub$n >= 5), ]
+
+#only do  overlap evaluation if there is more than one month_yr for id
+if(length(unique(sp_sub$month_yr)) > 1){
+
+#calculate pairwise overlap of each HR per season
+#can set method to whichever best fits your purposes, documentation in kerneloverlap function help
+HR_ol <- kerneloverlap(sp_sub[,2], method = c("BA"), percent = 95, conditional = FALSE)
+
+#reformat pairwise matrix to data frame and add species
+#This section helps create a clean way to summarize by species but can also just take out the species part and only use ids
+HRol_df <- melt(HR_ol)
+
+HRol_df <- HRol_df %>%
+ dplyr::rename("id_yr_month1" = X1, "id_yr_month2" = X2) %>%
+  mutate(spp = if_else(grepl("BI", id_yr_month1), "bison",
+                if_else(grepl("BH", id_yr_month1), "bighorn",
+                if_else(grepl("MD", id_yr_month1), "deer",
+                if_else(grepl("EL", id_yr_month1), "elk",
+                if_else(grepl("PR", id_yr_month1), "pronghorn", "NA")))))) %>%
+  mutate(value = as.numeric(value)) %>%
+ dplyr::rename("prop_overlap" = value) %>%
+  mutate(id_yr_month1 = as.character(id_yr_month1)) %>%
+  mutate(id_yr_month2 = as.character(id_yr_month2)) %>%
+  #remove combos of same ids
+  filter(id_yr_month1 != id_yr_month2) %>%
+  #set prop ol >1 to 1 
+  mutate(prop_overlap = if_else(prop_overlap > 1, 1, prop_overlap)) %>%
+  #add monthons and years
+  group_by(id_yr_month1) %>%
+  mutate(month1 = str_split(id_yr_month1, "_")[[1]][3]) %>%
+  mutate(yr1 = str_split(id_yr_month1, "_")[[1]][2]) %>%
+  ungroup() %>%
+  group_by(id_yr_month2) %>%
+  mutate(month2 = str_split(id_yr_month2, "_")[[1]][3]) %>%
+  mutate(yr2 = str_split(id_yr_month2, "_")[[1]][2]) %>%
+  #add id with no month_yr
+  mutate(id = u_id[i])
+
+
+HR_ol_comb <- bind_rows(HR_ol_comb, HRol_df)
+}
+}
+
+#remove na row from data
+HR_ol_comb <- HR_ol_comb %>% filter(id != "NA")
+
+#save data frame as csv
+write.csv(HR_ol_comb, "./Code output/dBBMM_UDs/dbbdm_indiv_fidelity_HR_overlap_month_yr_10.16.22.csv")
+```
+
+#Weekly overlap
+##Kernel overlap (%overlap) of each DBBM
+
+```{r}
+#load saved data
+sp_all <- readRDS("./Code output/dBBMM_UDs/allindiv_week_dbbm_spatpts_df.rds")
+
+
+#create id only data variable (no season or year)
+sp_all@data <- sp_all@data %>%
+  group_by(cid) %>%
+  mutate(id = str_split(cid, "_")[[1]][1])
+
+#loop per individual
+u_id <- unique(sp_all@data$id) #create variable of unique id (without seas_year) to loop by
+#want to loop by id so that we are only calculating overlap between the same individual's HRs that are across different seas_yr
+
+#create fake data frame to add to in loop
+HR_ol_comb <- data.frame(id = "NA", id_yr_week1 = "NA", id_yr_week2 = "NA", 
+                         spp = "NA", week1 = "NA", week2 = "NA", yr1 = "NA", 
+                         yr2 = "NA", prop_overlap = 0) 
+
+for(i in 1:length(u_id)){
+  print(i)
+
+  #separate out data that matches id
+sp_sub <- sp_all[which(sp_all$id == u_id[i]), ]
+
+#remove any weeks with less than 5 locations
+num_loc <- sp_sub@data %>%
+  group_by(week_yr) %>%
+  tally() #create data with week_yr and number of locations
+
+sp_sub@data <- left_join(sp_sub@data, num_loc, by = "week_yr") #join number of locations data with spatial data frame
+
+sp_sub <- sp_sub[which(sp_sub$n >= 5), ]
+
+#only do  overlap evaluation if there is more than one week_yr for id
+if(length(unique(sp_sub$week_yr)) > 1){
+
+#calculate pairwise overlap of each HR per season
+#can set method to whichever best fits your purposes, documentation in kerneloverlap function help
+HR_ol <- kerneloverlap(sp_sub[,2], method = c("BA"), percent = 95, conditional = FALSE)
+
+#reformat pairwise matrix to data frame and add species
+#This section helps create a clean way to summarize by species but can also just take out the species part and only use ids
+HRol_df <- melt(HR_ol)
+
+HRol_df <- HRol_df %>%
+ dplyr::rename("id_yr_week1" = X1, "id_yr_week2" = X2) %>%
+  mutate(spp = if_else(grepl("BI", id_yr_week1), "bison",
+                if_else(grepl("BH", id_yr_week1), "bighorn",
+                if_else(grepl("MD", id_yr_week1), "deer",
+                if_else(grepl("EL", id_yr_week1), "elk",
+                if_else(grepl("PR", id_yr_week1), "pronghorn", "NA")))))) %>%
+  mutate(value = as.numeric(value)) %>%
+ dplyr::rename("prop_overlap" = value) %>%
+  mutate(id_yr_week1 = as.character(id_yr_week1)) %>%
+  mutate(id_yr_week2 = as.character(id_yr_week2)) %>%
+  #remove combos of same ids
+  filter(id_yr_week1 != id_yr_week2) %>%
+  #set prop ol >1 to 1 
+  mutate(prop_overlap = if_else(prop_overlap > 1, 1, prop_overlap)) %>%
+  #add weekons and years
+  group_by(id_yr_week1) %>%
+  mutate(week1 = str_split(id_yr_week1, "_")[[1]][3]) %>%
+  mutate(yr1 = str_split(id_yr_week1, "_")[[1]][2]) %>%
+  ungroup() %>%
+  group_by(id_yr_week2) %>%
+  mutate(week2 = str_split(id_yr_week2, "_")[[1]][3]) %>%
+  mutate(yr2 = str_split(id_yr_week2, "_")[[1]][2]) %>%
+  #add id with no week_yr
+  mutate(id = u_id[i])
+
+
+HR_ol_comb <- bind_rows(HR_ol_comb, HRol_df)
+}
+}
+
+#remove na row from data
+HR_ol_comb <- HR_ol_comb %>% filter(id != "NA")
+
+#save data frame as csv
+write.csv(HR_ol_comb, "./Code output/dBBMM_UDs/dbbdm_indiv_fidelity_HR_overlap_month_yr_10.16.22.csv")
+```
+
+```{r}
+#basic summary (avg and sd overlap by spp all pairwise weeks) and plot
+week_summ_spp <- HR_ol_comb %>%
+  group_by(spp) %>%
+  summarise(avg_overlap = mean(prop_overlap), sd_overlap = sd(prop_overlap))
+
+library(plotrix)
+
+#graph
+av_ol_g <- ggplot(week_summ_spp, aes(x = spp, y = avg_overlap, 
+                        color = spp)) +
+  geom_errorbar(aes(ymin = max((avg_overlap - sd_overlap), 0), 
+                    ymax = (avg_overlap + sd_overlap)),
+                width = 0.2) +
+  geom_point() +
+  scale_y_continuous(limits = c(0,1.0), oob = rescale_none) +
+  xlab("Species") +
+  ylab("Mean proportion overlap") +
+  ggtitle("Individual Weekly Home Range Overlap") +
+  theme(legend.position = "none")
+
+av_ol_g + ggpubr::rotate()
+```
+
+
+

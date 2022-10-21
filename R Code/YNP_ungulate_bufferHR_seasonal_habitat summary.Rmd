@@ -270,6 +270,8 @@ saveRDS(buffHR, "./Code output/buffHR_avg topo and habitat data.RDS")
 #Summarize and graph data
 
 ```{r}
+buffHR <- readRDS("./Code output/buffHR_avg topo and habitat data.RDS")
+
 #create species summary data frame (average by species and season)
 buffHR_hab_spp <- buffHR %>%
   group_by(species) %>%

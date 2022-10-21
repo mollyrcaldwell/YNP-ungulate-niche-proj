@@ -1,0 +1,149 @@
+---
+title: "YNP ungulate individual dBBMM UD size: season, month, week"
+author: "Molly Caldwell"
+date: "2022-10-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(parallel)
+library(maptools)
+library(scales)
+library(ggpubr)
+library(maptools)
+library(reshape)
+```
+
+#HR size for dynBB- weekly
+
+```{r}
+#identify folder to pull UDs from
+fldr <- "./Code output/dBBMM_UDs/week/"
+
+#pull all ids from folder
+ids <- list.files(fldr, ".tif$") %>%  
+  str_replace(".tif","") %>% 
+  str_replace("BBdyn_week_","")
+```
+
+
+```{r}
+# UD size
+# run it on multiple processors
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("fldr","ids"))
+
+# now for the actual loop
+dynBB_HRsizes <- do.call(cbind, clusterApplyLB(clust, 1:length(ids), function(i){
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  
+  rast2 <- raster(paste0(fldr, "/BBdyn_week_", ids[i],".tif"))
+  # rast2 <- readRDS(paste0(fldr, "/BBdyn_", ids[i],".rds"))
+  rast2 <- getVolumeUD(as(rast2, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+  hr95 <- reclassify(rast2, rcl=matrix(c(0,0.95,1,0.95,1,0),2,3, byrow=T))  # reclassify areas below your contour as 1s and above 0s.
+  hr95 <- (res(hr95)[1]*res(hr95)[2]/1000000)*table(values(hr95)==0)[1]  # this counts the number of cells that are 1s and then multiplies it by the size of each cell in KM^2
+  # hr99 <- reclassify(rast2, rcl=matrix(c(0,0.99,1,0.99,1,0),2,3, byrow=T))
+  # hr99 <- (res(hr99)[1]*res(hr99)[2]/1000000)*table(values(hr99)==0)[1]
+  # hr50 <- reclassify(rast2, rcl=matrix(c(0,0.5,1,0.5,1,0),2,3, byrow=T))
+  # hr50 <- (res(hr50)[1]*res(hr50)[2]/1000000)*table(values(hr50)==0)[1]
+  return(c(hr95))
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+dynBB_HRsizes <- as.data.frame(dynBB_HRsizes) # turn into a data frame
+rownames(dynBB_HRsizes) <- c(95)
+colnames(dynBB_HRsizes) <- ids  # add column names to the matrix
+round(dynBB_HRsizes,2)  #in KM^2
+```
+
+```{r}
+HR_df_week <- dynBB_HRsizes %>%
+  pivot_longer(cols = c(1:ncol(dynBB_HRsizes)), names_to = 'id_yr_week', 
+               values_to = "HR_size_km2")
+
+#save data as csv
+write.csv(HR_df_week, "./Code output/dBBMM_UDs/indiv_dBBMM_sizekm2_week.csv",
+          row.names = FALSE)
+```
+
+#HR size for dynBB- monthly
+
+```{r}
+#identify folder to pull UDs from
+fldr <- "./Code output/dBBMM_UDs/month/"
+
+#pull all ids from folder
+ids <- list.files(fldr, ".tif$") %>%  
+  str_replace(".tif","") %>% 
+  str_replace("BBdyn_month_","")
+```
+
+
+```{r}
+# UD size
+# run it on multiple processors
+# identify cores (use 1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("fldr","ids"))
+
+# now for the actual loop
+dynBB_HRsizes <- do.call(cbind, clusterApplyLB(clust, 1:length(ids), function(i){
+  # need library() here for the packages your calculations require for your calculations
+  library(move)
+  
+  rast2 <- raster(paste0(fldr, "/BBdyn_month_", ids[i],".tif"))
+  # rast2 <- readRDS(paste0(fldr, "/BBdyn_", ids[i],".rds"))
+  rast2 <- getVolumeUD(as(rast2, Class="DBBMM"))    #turn it into a volume, where it starts with the highest use areas (uses move package)
+  hr95 <- reclassify(rast2, rcl=matrix(c(0,0.95,1,0.95,1,0),2,3, byrow=T))  # reclassify areas below your contour as 1s and above 0s.
+  hr95 <- (res(hr95)[1]*res(hr95)[2]/1000000)*table(values(hr95)==0)[1]  # this counts the number of cells that are 1s and then multiplies it by the size of each cell in KM^2
+  # hr99 <- reclassify(rast2, rcl=matrix(c(0,0.99,1,0.99,1,0),2,3, byrow=T))
+  # hr99 <- (res(hr99)[1]*res(hr99)[2]/1000000)*table(values(hr99)==0)[1]
+  # hr50 <- reclassify(rast2, rcl=matrix(c(0,0.5,1,0.5,1,0),2,3, byrow=T))
+  # hr50 <- (res(hr50)[1]*res(hr50)[2]/1000000)*table(values(hr50)==0)[1]
+  return(c(hr95))
+}))
+stopCluster(clust)   # you must stop the parallelization framework
+
+dynBB_HRsizes <- as.data.frame(dynBB_HRsizes) # turn into a data frame
+rownames(dynBB_HRsizes) <- c(95)
+colnames(dynBB_HRsizes) <- ids  # add column names to the matrix
+round(dynBB_HRsizes,2)  #in KM^2
+```
+
+```{r}
+HR_df_month <- dynBB_HRsizes %>%
+  pivot_longer(cols = c(1:ncol(dynBB_HRsizes)), names_to = 'id_yr_month', 
+               values_to = "HR_size_km2")
+
+#save data as csv
+write.csv(HR_df_month, "./Code output/dBBMM_UDs/indiv_dBBMM_sizekm2_month.csv",
+          row.names = FALSE)
+```
+
+
+
+
+
+

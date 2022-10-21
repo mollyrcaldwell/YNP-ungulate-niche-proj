@@ -1,0 +1,102 @@
+---
+title: "YNP Ungulates HR size vs. forb/grass biomass example"
+author: "Molly Caldwell"
+date: "3/28/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#packages
+library(sf)
+library(raster)
+library(mapview)
+library(tidyverse)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(parallel)
+library(ecospat)
+```
+
+
+```{r}
+#bring in HR size data
+HR_data <- 
+  
+  
+#bring in habitat data
+month_hab_data <- readRDS("./Code output/individual_habitat_metrics/indiv_monthly_habitat_summ.rds")
+
+#add id_yr_month
+month_hab_data <- month_hab_data %>%
+  rowwise() %>%
+  mutate(id_yr_month = paste(str_split(id_yr_seas, "_")[[1]][1], year(month), month(month), sep = "_")) %>%
+  ungroup() %>%
+  dplyr::select(id_yr_month, forbgrass_biomass_avg)
+
+```
+
+```{r}
+#join hr size and hab
+hr_data <- left_join(HR_df, month_hab_data, by = "id_yr_month")
+
+hr_data <- hr_data %>%
+  rowwise() %>%
+  mutate(id = str_split(id_yr_month, "_")[[1]][1]) %>%
+  ungroup() %>%
+  filter(id %in% c("BI070", "BI084", "MD11", "MD16"))
+```
+
+```{r}
+ggplot(data = hr_data, aes(x = forbgrass_biomass_avg, y = HR_size, color = id)) +
+  geom_point()
+```
+
+```{r}
+#scatter plot with encircled points
+library(ggalt)
+
+#graph mean slope and mean %cover by species
+ggplot(data = hr_data, aes(x = forbgrass_biomass_avg, y = HR_size, color = id)) +
+  geom_point(size = 3) +
+  geom_encircle() +
+  xlab("Forb/grass biomass") +
+  ylab("Utilization distribution size (km2)")  
+
+```
+
+```{r}
+#graph mean slope and mean %cover by species
+ggplot(data = hr_data, aes(x = forbgrass_biomass_avg, y = HR_size, color = id)) +
+  geom_encircle() +
+  xlab("Forb/grass biomass") +
+  ylab("Utilization distribution size (km2)")  
+
+```
+
+```{r}
+#graph mean slope and mean %cover by species
+ggplot(data = hr_data, aes(x = forbgrass_biomass_avg, y = HR_size, color = id)) +
+  stat_smooth(method = "lm", se = F) +
+  xlab("Forb/grass biomass") +
+  ylab("Utilization distribution size (km2)")  
+```
+
+```{r}
+#ridgeline plots
+library(ggridges)
+library(ggpubr)
+
+#graph mean slope and mean %cover by species
+ggplot(data = hr_data, aes(x = HR_size, y = id, fill = id)) +
+  geom_density_ridges(aes(scale = 5, alpha = 0.2)) +
+  xlab("Utilization distribution size (km2)") +
+  ylab("Individual")
+
+```

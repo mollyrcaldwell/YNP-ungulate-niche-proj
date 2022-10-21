@@ -1,0 +1,362 @@
+---
+title: "YNP Ungulate dBBMM High Use Areas"
+author: "Molly Caldwell"
+date: "9/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(raster)
+```
+
+#Select bison growing season (spring and summer) areas with range of useage (top 75%, top 50%, lowest 10-25% use) as proxy for grazing areas low-high use
+Sum raster values for all individual's dBBMM UD rasters. 
+
+```{r}
+#Load dBBMM UDs
+files_sp = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*BI.*spring.tif$", full.names = TRUE)
+
+files_su = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*BI.*summer.tif$", full.names = TRUE)
+
+files <- c(files_sp, files_su)
+
+dbbm_stack <- stack(files)
+
+#sum rasters
+dbbmm_sum <- calc(dbbm_stack, sum)
+
+#save summed raster
+writeRaster(dbbmm_sum, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_SUM_ALLbison_growseas.tif", 
+            format="GTiff", overwrite=T)
+```
+
+```{r}
+#extract areas with top 75% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc75_min_range <- max_value - (max_value*0.75)
+
+dbbmm_sum_top75perc <- dbbmm_sum >= perc75_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top75perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top75perc_ALLbison_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top75perc <- rasterToPolygons(dbbmm_sum_top75perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top75perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top75perc_ALLbison_growseas",
+         driver="ESRI Shapefile")
+```
+
+```{r}
+#extract areas with top 50% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc50_min_range <- max_value - (max_value*0.50)
+
+dbbmm_sum_top50perc <- dbbmm_sum >= perc50_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top50perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top50perc_ALLbison_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top50perc <- rasterToPolygons(dbbmm_sum_top50perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top50perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top50perc_ALLbison_growseas",
+         driver="ESRI Shapefile")
+```
+
+```{r}
+#extract areas with bottom 10-25% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc10to25_min <- (max_value*0.40)
+perc10to25_max <- (max_value*0.50)
+
+
+dbbmm_sum_low10to25perc <- dbbmm_sum <= perc10to25_max & dbbmm_sum >= perc10to25_min
+
+#save extracted raster
+writeRaster(dbbmm_sum_low10to25perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_40to50perc_ALLbison_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_low10to25perc <- rasterToPolygons(dbbmm_sum_low10to25perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_low10to25perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_40to50perc_ALLbison_growseas",
+         driver="ESRI Shapefile")
+```
+
+#Select bighorn growing season areas with highest usage (top 75% and top 50%)
+Sum raster values for all individual's dBBMM UD rasters. 
+
+```{r}
+#Load dBBMM UDs
+files_sp = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*BH.*spring.tif$", full.names = TRUE)
+
+files_su = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*BH.*summer.tif$", full.names = TRUE)
+
+files <- c(files_sp, files_su)
+
+dbbm_stack <- stack(files)
+
+#sum rasters
+dbbmm_sum <- calc(dbbm_stack, sum)
+
+#save summed raster
+writeRaster(dbbmm_sum, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_SUM_ALLbighorn_growseas.tif", 
+            format="GTiff", overwrite=T)
+```
+
+```{r}
+#extract areas with top 75% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc75_min_range <- max_value - (max_value*0.75)
+
+dbbmm_sum_top75perc <- dbbmm_sum >= perc75_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top75perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top75perc_ALLbighorn_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top75perc <- rasterToPolygons(dbbmm_sum_top75perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top75perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top75perc_ALLbighorn_growseas",
+         driver="ESRI Shapefile")
+```
+
+```{r}
+#extract areas with top 50% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc50_min_range <- max_value - (max_value*0.50)
+
+dbbmm_sum_top50perc <- dbbmm_sum >= perc50_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top50perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top50perc_ALLbighorn_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top50perc <- rasterToPolygons(dbbmm_sum_top50perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top50perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top50perc_ALLbighorn_growseas",
+         driver="ESRI Shapefile")
+```
+
+#Select deer growing season areas with highest usage (top 75% and top 50%)
+Sum raster values for all individual's dBBMM UD rasters. 
+
+```{r}
+#Load dBBMM UDs
+files_sp = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*MD.*spring.tif$", full.names = TRUE)
+
+files_su = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*MD.*summer.tif$", full.names = TRUE)
+
+files <- c(files_sp, files_su)
+
+dbbm_stack <- stack(files)
+
+#sum rasters
+dbbmm_sum <- calc(dbbm_stack, sum)
+
+#save summed raster
+writeRaster(dbbmm_sum, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_SUM_ALLdeer_growseas.tif", 
+            format="GTiff", overwrite=T)
+```
+
+```{r}
+#extract areas with top 75% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc75_min_range <- max_value - (max_value*0.75)
+
+dbbmm_sum_top75perc <- dbbmm_sum >= perc75_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top75perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top75perc_ALLdeer_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top75perc <- rasterToPolygons(dbbmm_sum_top75perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top75perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top75perc_ALLdeer_growseas",
+         driver="ESRI Shapefile")
+```
+
+```{r}
+#extract areas with top 50% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc50_min_range <- max_value - (max_value*0.50)
+
+dbbmm_sum_top50perc <- dbbmm_sum >= perc50_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top50perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top50perc_ALLdeer_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top50perc <- rasterToPolygons(dbbmm_sum_top50perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top50perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top50perc_ALLdeer_growseas",
+         driver="ESRI Shapefile")
+```
+
+#Select elk growing season areas with highest usage (top 75% and top 50%)
+Sum raster values for all individual's dBBMM UD rasters. 
+
+```{r}
+#Load dBBMM UDs
+files_sp = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*EL.*spring.tif$", full.names = TRUE)
+
+files_su = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*EL.*summer.tif$", full.names = TRUE)
+
+files <- c(files_sp, files_su)
+
+dbbm_stack <- stack(files)
+
+#sum rasters
+dbbmm_sum <- calc(dbbm_stack, sum)
+
+#save summed raster
+writeRaster(dbbmm_sum, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_SUM_ALLelk_growseas.tif", 
+            format="GTiff", overwrite=T)
+```
+
+```{r}
+#extract areas with top 75% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc75_min_range <- max_value - (max_value*0.75)
+
+dbbmm_sum_top75perc <- dbbmm_sum >= perc75_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top75perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top75perc_ALLelk_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top75perc <- rasterToPolygons(dbbmm_sum_top75perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top75perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top75perc_ALLelk_growseas",
+         driver="ESRI Shapefile")
+```
+
+```{r}
+#extract areas with top 50% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc50_min_range <- max_value - (max_value*0.50)
+
+dbbmm_sum_top50perc <- dbbmm_sum >= perc50_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top50perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top50perc_ALLelk_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top50perc <- rasterToPolygons(dbbmm_sum_top50perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top50perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top50perc_ALLelk_growseas",
+         driver="ESRI Shapefile")
+```
+
+#Select pronghorn growing season areas with highest usage (top 75% and top 50%)
+Sum raster values for all individual's dBBMM UD rasters. 
+
+```{r}
+#Load dBBMM UDs
+files_sp = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*PR.*spring.tif$", full.names = TRUE)
+
+files_su = list.files("./Code output/dBBMM_UDs/season/", 
+                   pattern="*PR.*summer.tif$", full.names = TRUE)
+
+files <- c(files_sp, files_su)
+
+dbbm_stack <- stack(files)
+
+#sum rasters
+dbbmm_sum <- calc(dbbm_stack, sum)
+
+#save summed raster
+writeRaster(dbbmm_sum, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_SUM_ALLpronghorn_growseas.tif", 
+            format="GTiff", overwrite=T)
+```
+
+```{r}
+#extract areas with top 75% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc75_min_range <- max_value - (max_value*0.75)
+
+dbbmm_sum_top75perc <- dbbmm_sum >= perc75_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top75perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top75perc_ALLpronghorn_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top75perc <- rasterToPolygons(dbbmm_sum_top75perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top75perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top75perc_ALLpronghorn_growseas",
+         driver="ESRI Shapefile")
+```
+
+```{r}
+#extract areas with top 50% raster values
+max_value <- max(dbbmm_sum@data@max)
+perc50_min_range <- max_value - (max_value*0.50)
+
+dbbmm_sum_top50perc <- dbbmm_sum >= perc50_min_range
+
+#save extracted raster
+writeRaster(dbbmm_sum_top50perc, filename = "./Code output/dBBMM_UDs/UD_SUMS/dBBMM_top50perc_ALLpronghorn_growseas.tif", 
+            format="GTiff", overwrite=T)
+
+#convert to polygons and save as shapefile
+poly_top50perc <- rasterToPolygons(dbbmm_sum_top50perc, fun = function(x){x > 0},
+                                   dissolve = TRUE)
+
+writeOGR(obj = poly_top50perc, dsn = "~/UWyo/PhD project/YNP-ungulate-niche-proj/Code output/dBBMM_UDs/UD_SUMS", 
+         layer = "dBBMM_UD_top50perc_ALLpronghorn_growseas",
+         driver="ESRI Shapefile")
+```

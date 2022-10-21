@@ -1,0 +1,188 @@
+---
+title: "YNP Ungulate network connections: 1000m, 15 min"
+author: "Molly Caldwell"
+date: "9/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(sf)
+library(mapview)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(adehabitatHR)
+library(move)
+library(BBMM)
+library(lubridate)
+library(raster)
+library(spatsoc)
+library(data.table)
+```
+
+```{r}
+#load all spp gps points
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+```
+
+#Prep data for network connections, spatsoc package
+
+```{r}
+#split geometry into x y columns
+data_xy <- data %>%
+    mutate(x = unlist(purrr::map(data$geometry,1)),
+           y = unlist(purrr::map(data$geometry,2)))
+
+data_xy$geometry <- NULL
+
+#convert data to data table for spatsoc
+data_dt <- setDT(data_xy)
+
+```
+
+#Spatial network- by points (1000 m, within 15 min)
+
+##Temporal grouping
+
+```{r}
+#temporal group with threshold of x hours
+g_data <- group_times(DT = data_dt, datetime = 'date', threshold = "15 minutes")
+```
+
+##Spatial grouping (points)
+
+```{r}
+#spatial group (by GPS points) with threshold 150 meters
+group_pts(DT = g_data, threshold = 1000, id = 'cid', 
+                        coords = c('x', 'y'), timegroup = 'timegroup') #threshold units based on GPS data CRS
+```
+
+```{r}
+# Number of unique individuals by group
+num_indiv_g <- g_data[, uniqueN(cid), by = group]
+
+#grab groups with only 1 indiv for filtering later
+g1 <- num_indiv_g %>%
+  filter(V1 == 1) %>%
+  dplyr::select(group)
+
+#summarize number of groups per unique num indiv
+num_indiv_summ <- num_indiv_g %>%
+  dplyr::rename("num_indiv" = V1) %>%
+  group_by(num_indiv) %>%
+  summarize(num_groups = n())
+```
+
+```{r}
+`%!in%` <- Negate(`%in%`)
+
+#species by groups
+group_summ <- g_data %>%
+  filter(group %!in% g1$group) %>% #filter out groups with only 1 individual
+  group_by(group) %>%
+  summarize(num_bighorn = sum(species == "bighorn"), 
+            num_bison = sum(species == "bison"), 
+            num_deer = sum(species == "deer"),
+            num_pronghorn = sum(species == "pronghorn"),
+            num_elk = sum(species == "elk"))
+
+#number groups with 1 to 5 species summary
+spp_group_summ <- group_summ %>%
+  group_by(group) %>%
+  mutate(num_spp = sum(if_else(num_bighorn == 0, 0, 1), 
+                       if_else(num_bison == 0, 0, 1),
+                       if_else(num_deer == 0, 0, 1),
+                       if_else(num_pronghorn == 0, 0, 1),
+                       if_else(num_elk == 0, 0, 1))) %>%
+  ungroup() %>%
+  group_by(num_spp) %>%
+  summarize(num_groups = n())
+```
+
+
+#Spatial network- by points (500 m, within 15 min)
+
+##Temporal grouping
+
+```{r}
+#temporal group with threshold of x hours
+g_data_500 <- group_times(DT = data_dt, datetime = 'date', threshold = "2 hours")
+```
+
+##Spatial grouping (points)
+
+```{r}
+#spatial group (by GPS points) with threshold 150 meters
+group_pts(DT = g_data_500, threshold = 500, id = 'cid', 
+                        coords = c('x', 'y'), timegroup = 'timegroup') #threshold units based on GPS data CRS
+```
+
+```{r}
+# Number of unique individuals by group
+num_indiv_g500 <- g_data_500[, uniqueN(cid), by = group]
+
+#grab groups with only 1 indiv for filtering later
+g1500 <- num_indiv_g500 %>%
+  filter(V1 == 1) %>%
+  dplyr::select(group)
+
+#summarize number of groups per unique num indiv
+num_indiv_summ500 <- num_indiv_g500 %>%
+  dplyr::rename("num_indiv" = V1) %>%
+  group_by(num_indiv) %>%
+  summarize(num_groups = n())
+
+write.csv(num_indiv_summ500, "./Code output/prelimCh1_numindiv_500mgroups.csv",
+          row.names = F)
+```
+
+```{r}
+`%!in%` <- Negate(`%in%`)
+
+#species by groups
+group_summ500 <- g_data_500 %>%
+  filter(group %!in% g1500$group) %>% #filter out groups with only 1 individual
+  group_by(group) %>%
+  summarize(num_bighorn = sum(species == "bighorn"), 
+            num_bison = sum(species == "bison"), 
+            num_deer = sum(species == "deer"),
+            num_pronghorn = sum(species == "pronghorn"),
+            num_elk = sum(species == "elk"))
+
+#number groups with 1 to 5 species summary
+spp_group_summ500 <- group_summ500 %>%
+  group_by(group) %>%
+  mutate(num_spp = sum(if_else(num_bighorn == 0, 0, 1), 
+                       if_else(num_bison == 0, 0, 1),
+                       if_else(num_deer == 0, 0, 1),
+                       if_else(num_pronghorn == 0, 0, 1),
+                       if_else(num_elk == 0, 0, 1))) %>%
+  ungroup() %>%
+  group_by(num_spp) %>%
+  summarize(num_groups = n())
+
+write.csv(spp_group_summ500, "./Code output/prelimCh1_numspp_500mgroups.csv",
+          row.names = F)
+```
+
+
+```{r}
+ph <- group_summ500 %>%
+  filter(num_pronghorn > 0) %>% 
+  group_by(group) %>%
+  mutate(num_spp = sum(if_else(num_bighorn == 0, 0, 1), 
+                       if_else(num_bison == 0, 0, 1),
+                       if_else(num_deer == 0, 0, 1),
+                       if_else(num_pronghorn == 0, 0, 1),
+                       if_else(num_elk == 0, 0, 1))) %>%
+  ungroup() %>%
+  group_by(num_spp) %>%
+  summarize(num_groups = n())
+```
+

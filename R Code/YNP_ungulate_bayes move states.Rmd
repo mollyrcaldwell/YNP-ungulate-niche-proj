@@ -39,7 +39,7 @@ data$geometry <- NULL
 
 #rename id_yr_seas to id, dist to SL, and turn angle to TA for bayesmove package
 data <- data %>%
-  rename("id" = id_yr_seas, "SL" = dist, "TA" = rel.angle)
+  dplyr::rename("id" = id_yr_seas, "SL" = dist, "TA" = rel.angle)
 
 #subset data for trial
 #reduce data to 2 random individuals per species
@@ -158,7 +158,7 @@ ngibbs<- 10000
 nbins<- c(5,8)
 
 progressr::handlers(progressr::handler_progress(clear = FALSE))
-future::plan(multisession, workers = availableCores()-1)
+future::plan("multicore", workers = availableCores()-1)
 #run all MCMC chains in parallel
 library(bayesmove)
 
@@ -167,6 +167,7 @@ dat.res<- segment_behavior(data = data_list2, ngibbs = ngibbs, nbins = nbins,
 
 future::plan(future::sequential)  #return to single core
 ```
+
 
 
 
