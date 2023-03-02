@@ -15,19 +15,48 @@ knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
 library(sf)
 library(tidyverse)
 library(lubridate)
+library(astroFns)
 ```
 
 ```{r}
 #load GPS data with movement parameters calculated for all species
 data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+
+#create date only column to group by day
+data <- data %>%
+  mutate(date_only = format(date, format = "%Y-%m-%d"))
 ```
 
-#Weekly time periods of high movement rates
-Times that movements were within the top quantile of movement rates per day averaged per week.
+#Times of high movement rates
+Times (in radians) that movements were within the top quantile of speeds per day averaged per week.
 
 ```{r}
-#add week to data
+#calculate top quantile of daily speeds per individual per day and identify which points are in top quantile
+data <- data %>%
+  group_by(cid, date_only) %>%
+  mutate(daily_speed_tquant = unname(quantile(speed, na.rm = T))[[4]]) %>%
+  mutate(speed_tquant = if_else(speed >= daily_speed_tquant, "Y", "N")) %>%
+  ungroup()
 
+#filter data to top quantile speeds only
+data <- data %>%
+  filter(speed_tquant == "Y")
+
+#create time only column and set time to radians 
+data <- data %>%
+  mutate(time = hms2rad(format(date, format = "%H:%M:%S")))
+
+#remove geometry
+data$geometry <- NULL
+
+#select columns of interest
+data <- data %>%
+  select(c(cid, id_yr_seas, species, date, time))
 ```
 
+```{r}
+#save csv
+write.csv(data, "./Code output/indiv_alldata_highact_times.csv", 
+          row.names = FALSE)
+```
 

@@ -123,23 +123,32 @@ print(ta)
 
 ```{r}
 # Define bin number and limits for turning angles by species
-angle.bin.lims = seq(from=-pi, to=pi, by=pi/4)  #8 bins
+angle.bin.lims = seq(from=0, to=360, by=360/8)  #8 bins
 
 # Define bin number and limits for step lengths
-dist.bin.lims = quantile(bind_rows(data_list_filt[[1]])$dist,
+dist.bin.lims = quantile(bind_rows(data_list_filt[[2]])$SL,
                        c(0,0.25,0.50,0.75,0.90,1), na.rm=T)  #5 bins
 ```
 
 #Segment movement states
 
 ```{r}
-data_list <- data_list_filt[[1]]
+data_list <- data_list_filt[[2]]
 data_list <- data_list[c(1:2)]
 
+#data_list descretize observations to defined bins
+#DONT FORGET TO DO THIS, R WILL ABORT if YOU DONT IN THE SEGMENT BEHAVIOR
+data_list_d <-  map(data_list,
+                       discrete_move_var,
+                       lims = list(dist.bin.lims, angle.bin.lims),
+                 varIn = c("SL", "TA"),
+                 varOut = c("SL1", "TA1"))
+
+
 # Only retain id and discretized step length (SL) and turning angle (TA) columns
-data_list2 <- purrr::map(data_list,
+data_list2 <- purrr::map(data_list_d,
                    subset,
-                   select = c("id", "SL", "TA"))
+                   select = c("id", "SL1", "TA1"))
 
 
 
@@ -152,13 +161,13 @@ set.seed(1)
 alpha<- 1
 
 # Set number of iterations for the Gibbs sampler
-ngibbs<- 10000
+ngibbs<- 1000
 
 # Set the number of bins used to discretize each data stream
 nbins<- c(5,8)
 
 progressr::handlers(progressr::handler_progress(clear = FALSE))
-future::plan("multicore", workers = availableCores()-1)
+future::plan("multicore", workers = availableCores()-2)
 #run all MCMC chains in parallel
 library(bayesmove)
 

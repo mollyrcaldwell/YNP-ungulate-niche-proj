@@ -58,14 +58,13 @@ saveRDS(hab_day, "./Code output/individual_habitat_metrics/indiv_daily_habitat_s
 
 ```{r}
 #create 5-day grouping variable per id_yr_seas
-data <- data %>% group_by(id_yr_seas) %>%
-  mutate(week = cut(as.Date(date), breaks = "5 days", include.lowest = T))
-  
+data <- data %>%
+  mutate(week = week(date))
 ```
 
 ```{r}
 hab_week <- data %>%
-  group_by(id_yr_seas, week) %>%
+  group_by(id_yr_seas, week, yr) %>%
   summarize(csumNDVImax_avg = mean(csumNDVImax), csumNDVImax_sd = sd(csumNDVImax),
             trasp_avg = mean(trasp), trasp_sd = sd(trasp),
             slope_avg = mean(slope), slope_sd = sd(slope),
@@ -93,7 +92,7 @@ saveRDS(hab_week, "./Code output/individual_habitat_metrics/indiv_weekly_habitat
 ```{r}
 #create month grouping variable per id_yr_seas
 data <- data %>% group_by(id_yr_seas) %>%
-  mutate(month = cut(as.Date(date), breaks = "1 month", include.lowest = T))
+  mutate(month = month(date))
   
 ```
 

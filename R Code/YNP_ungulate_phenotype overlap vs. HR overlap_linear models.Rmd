@@ -1,0 +1,191 @@
+---
+title: "Phenotype overlap vs. HR overlap linear models"
+author: "Molly Caldwell"
+date: "2022-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+library(lme4)
+library(sjPlot)
+library(sjmisc)
+library(ggplot2)
+
+
+#set wd
+setwd("~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load data (weekly phenotype and spatial HR overlap)
+HR_ol <- read.csv("./Code output/dBBMM_UDs/dbbdm_allHR_overlap_seas_yr_8.31.22.csv")
+HR_ol$X <- NULL
+HR_size_ol <- readRDS("./Code output/niche_densities/Oct_2022/id_yr_seas_weekHRsize_ol.rds")
+biomass_ol <- readRDS("./Code output/niche_densities/Oct_2022/id_yr_seas_weekhabitat_forbgrassbiomass_ol.rds")
+dayact_ol <- readRDS("./Code output/niche_densities/Oct_2022/id_yr_seas_day_timehighact_ol.rds")
+```
+
+```{r}
+#filter HR_size_ol to only paired ids in same yr_seas
+HR_size_ol <- HR_size_ol %>% 
+  rowwise() %>% 
+  mutate(yr_seas1 = paste(str_split(id1, "_")[[1]][2],
+                          str_split(id1, "_")[[1]][3], sep = "_")) %>% 
+  mutate(yr_seas2 = paste(str_split(id2, "_")[[1]][2],
+                          str_split(id2, "_")[[1]][3], sep = "_")) %>% 
+  ungroup() %>% 
+  filter(yr_seas1 == yr_seas2)
+```
+
+```{r}
+#join phenotype and HR overlap data
+HRol_phen <- left_join(HR_ol, HR_size_ol, by = c("id1", "id2"))
+
+HRol_phen <- HRol_phen %>% 
+  dplyr::rename('HRsize_ol' = ovl_est, 'HR_ol' = prop_overlap)
+
+HRol_phen <- left_join(HRol_phen, biomass_ol, by = c("id1", "id2"))
+
+HRol_phen <- HRol_phen %>% 
+  dplyr::rename('biomass_ol' = ovl_est)
+
+HRol_phen <- left_join(HRol_phen, dayact_ol, by = c("id1", "id2"))
+
+HRol_phen <- HRol_phen %>% 
+  dplyr::rename('dayact_ol' = ovl_est)
+
+#create same (0) or different (1) species overlap column
+HRol_phen <- HRol_phen %>%
+  mutate(spp_type = if_else(spp1 == spp2, "same species", "different species"))
+
+#create season column
+HRol_phen <- HRol_phen %>%
+  rowwise() %>% 
+  mutate(season = str_split(yr_seas1, "_")[[1]][2])
+
+#set ol as numeric
+HRol_phen <- HRol_phen %>%
+  mutate(across(c("HR_ol", "HRsize_ol", "biomass_ol", "dayact_ol"),~ as.numeric(.x))) 
+
+#set species type as ordered factor
+HRol_phen$spp_type <- factor(HRol_phen$spp_type, levels = c("same species", "different species"))
+```
+
+#HR size models
+
+```{r}
+#linear model
+hr_size_model <- lm(HRsize_ol ~ HR_ol*spp_type, data = HRol_phen)
+summary(hr_size_model)
+```
+
+```{r}
+set_theme(
+  base = theme_light(), 
+  axis.title.size = 1.4,
+  axis.textsize = 1.1,
+  legend.size = 1.2,
+  geom.label.color = "black"
+)
+
+plot_model(hr_size_model, type = "pred", terms = c("HR_ol", "spp_type"),
+           axis.title = c("Space use overlap", "Phenotype similarity"),
+           title = "", colors = c("#0072B2", "#D55E00"), line.size = 1.5)
+```
+
+```{r}
+#linear model- with season
+hr_size_model_seas <- lm(HRsize_ol ~ HR_ol*spp_type*season, data = HRol_phen)
+summary(hr_size_model_seas)
+```
+
+```{r}
+theme_set(theme_sjplot())
+
+plot_model(hr_size_model_seas, type = "pred", terms = c("HR_ol", "spp_type", "season"),
+           axis.title = c("Space use overlap", "Home range size similarity"),
+           title = "", colors = c("#DC3220", "#005AB5"))
+```
+
+#Forb grass biomass models
+
+```{r}
+#linear model
+hr_biomass_model <- lm(biomass_ol ~ HR_ol*spp_type, data = HRol_phen)
+summary(hr_biomass_model)
+```
+
+```{r}
+set_theme(
+  base = theme_light(), 
+  axis.title.size = 1.4,
+  axis.textsize = 1.1,
+  legend.size = 1.2,
+  geom.label.color = "black"
+)
+
+plot_model(hr_biomass_model, type = "pred", terms = c("HR_ol", "spp_type"),
+           axis.title = c("Space use overlap", "Vegetation biomass use similarity"),
+           title = "", colors = c("#0072B2", "#D55E00"), line.size = 1.5)
+
+```
+
+```{r}
+#linear model
+hr_biomass_model_seas <- lm(biomass_ol ~ HR_ol*spp_type*season, data = HRol_phen)
+summary(hr_biomass_model_seas)
+```
+
+```{r}
+theme_set(theme_sjplot())
+
+# make spp type categorical and change to same or different
+HRol_phen$spp_type <- to_factor(HRol_phen$spp_type)
+
+plot_model(hr_biomass_model_seas, type = "pred", terms = c("HR_ol", "spp_type", "season"),
+           axis.title = c("Space use overlap", "Forb/grass biomass use similarity"),
+           title = "", colors = c("#DC3220", "#005AB5"))
+```
+
+#Daily activity models
+
+```{r}
+#linear model
+hr_dayact_model <- lm(dayact_ol ~ HR_ol*spp_type, data = HRol_phen)
+summary(hr_dayact_model)
+```
+
+```{r}
+set_theme(
+  base = theme_light(), 
+  axis.title.size = 1.4,
+  axis.textsize = 1.1,
+  legend.size = 1.2,
+  geom.label.color = "black"
+)
+
+plot_model(hr_dayact_model, type = "pred", terms = c("HR_ol", "spp_type"),
+           axis.title = c("Space use overlap", "Daily activity similarity"),
+           title = "", colors = c("#0072B2", "#D55E00"), line.size = 1.5)
+```
+
+```{r}
+#linear model with season
+hr_dayact_model_seas <- lm(dayact_ol ~ HR_ol*spp_type*season, data = HRol_phen)
+summary(hr_dayact_model_seas)
+```
+
+```{r}
+theme_set(theme_sjplot())
+
+plot_model(hr_dayact_model_seas, type = "pred", terms = c("HR_ol", "spp_type", "season"),
+           axis.title = c("Space use overlap", "Daily activity similarity"),
+           title = "", colors = c("#DC3220", "#005AB5"))
+```

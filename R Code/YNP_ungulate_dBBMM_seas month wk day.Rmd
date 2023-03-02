@@ -28,7 +28,7 @@ library(parallel)
 
 ```{r}
 #load seasonal gps data- all spp, 2 hr fixes
-data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+data <- readRDS("~/UWyo/PhD project/YNP-ungulate-niche-proj/Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
 ```
 
 #Dynamic brownian bridge movement models
@@ -53,7 +53,7 @@ plot(sample_n(data[,"cid"],1000), add=TRUE)   # add a sample of your points
 
 ```{r}
 # verify your folder to write your BBs to is what you want!
-fldr <- "./Code output/dBBMM_UDs/season/"
+fldr <- "./Code output/dBBMM_UDs/season/trial/"
 dir(fldr)   # There shouldn't be any .tif files with dynBB... if so, you might want to delete them.
 
 ids <- unique(data$id_yr_seas) #loop over ids

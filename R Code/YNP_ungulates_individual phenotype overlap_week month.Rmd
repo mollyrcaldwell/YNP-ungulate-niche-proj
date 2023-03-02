@@ -1,0 +1,501 @@
+---
+title: "YNP ungulates phenotype overlap: HR size, habitat use, daily activity, social networks (month, week)"
+author: "Molly Caldwell"
+date: "10/22/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+library(ggridges)
+library(Ostats)
+library(parallel)
+library(raster)
+library(sf)
+library(data.table)
+library(overlap)
+library(compiler)
+
+#set wd
+setwd("~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#setup just in time compiler to speed up things
+enableJIT(3)
+```
+
+
+#Individual overlap- weekly home range size
+Overlap by id_yr_seas
+
+```{r}
+#Determine what seasons each week-yr are in to group analysis by season
+#load gps data
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+
+#remove geometry 
+data$geometry <- NULL
+
+#subset to variables of interest and add week
+data <- data %>%
+  dplyr::select(c(date, season, yr)) %>%
+  mutate(week = week(date)) %>%
+  mutate(yr_week = paste(yr, week, sep = "_")) %>% 
+  dplyr::select(c(yr_week, season, yr))
+
+#take only unique week_yr
+data <- distinct(data)
+```
+
+```{r}
+#load HR size per week data
+HRsize_week <- read.csv("./Code output/dBBMM_UDs/indiv_dBBMM_sizekm2_week.csv")
+
+#add cid and yr_week variables
+HRsize_week <- HRsize_week %>% 
+  rowwise() %>% 
+  mutate(cid = str_split(id_yr_week, "_")[[1]][1]) %>%
+  mutate(yr_week = paste(str_split(id_yr_week, "_")[[1]][2], 
+                         str_split(id_yr_week, "_")[[1]][3], sep = "_")) %>%
+  ungroup()
+
+#join with data with season
+HRsize_week <- left_join(HRsize_week, data, by = c("yr_week"))
+
+#create id_yr_seas column and take only distinct id_yr_week
+HRsize_week <- HRsize_week %>% 
+  mutate(id_yr_seas = paste(cid, yr, season, sep = "_")) %>%
+  distinct(id_yr_week, .keep_all = TRUE)
+
+```
+
+```{r}
+#create list of indiv by id_yr_seas with only id_yr_seas on HR_size_km2
+HRsize_week <- HRsize_week %>%
+  dplyr::select(c(id_yr_seas, HR_size_km2))
+
+#use only id_yr_seas with >= 4 weeks data per season
+week_4 <- HRsize_week %>% #determine which id_yr_seas have at least 4 weeks
+  group_by(id_yr_seas) %>%
+  summarise(n_week = n()) %>%
+  filter(n_week >= 4)
+
+HRsize_week <- HRsize_week %>% #filter out id yr seas with less than 4 weeks
+  filter(id_yr_seas %in% week_4$id_yr_seas)
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("HRsize_week"))
+
+#create looping variable- id_yr_seas
+ids <- unique(HRsize_week$id_yr_seas)
+#create data frame to save overlap values
+ol_df_HRsize <- data.frame(id1 = "NA", id2 = "NA", ovl_est = "NA")
+
+for(i in 1:length(ids)){ #first loop by ids
+  
+  d1 <- HRsize_week %>% filter(id_yr_seas == ids[i])
+  d1 <- d1$HR_size_km2
+  
+  for(j in 1:length(ids)){ #second loop by ids (to do pairwise overlap between each id_yr_seas)
+    print(paste0("i: ", i, " j: ", j))
+    
+    if(ids[i] != ids[j]){#only run if ids are not the same
+      d2 <- HRsize_week %>% filter(id_yr_seas == ids[j])
+      d2 <- d2$HR_size_km2
+      
+      d_list <- list(d1, d2)
+      
+      ol <- overlapping::overlap(d_list, nbins = 50) #overlapping package estimate density overlap
+      
+      df <- data.frame(id1 = ids[i], id2 = ids[j], ovl_est = ol[["OV"]][["Y1-Y2"]]) #create data frame with ids
+      
+      ol_df_HRsize <- rbind(df, ol_df_HRsize) #combine data with pre-existing df
+    }
+  }
+}
+
+
+stopCluster(clust)   #stop the parallelization framework
+
+ol_df_HRsize <- ol_df_HRsize %>% 
+  filter(id1 != "NA")
+
+saveRDS(ol_df_HRsize, file = "./Code output/niche_densities/Oct_2022/id_yr_seas_weekHRsize_ol.rds")
+```
+
+
+#Individual overlap- weekly habitat use (mean IRG values, forb/grass biomass)
+Overlap by id_yr_seas
+
+```{r}
+#load habitat use per week data
+habitat_week <- readRDS("./Code output/individual_habitat_metrics/indiv_weekly_habitat_summ.rds")
+
+#add cid and yr_week variables and select only IRG vals and forb/grass biomass
+habitat_week <- habitat_week %>% 
+  rowwise() %>% 
+  mutate(cid = str_split(id_yr_seas, "_")[[1]][1]) %>%
+  mutate(id_yr_week = paste(cid, yr, week, sep = "_")) %>% 
+  mutate(yr_week = paste(yr, week, sep = "_")) %>%
+  mutate(yr_seas = paste(yr, str_split(id_yr_seas, "_")[[1]][3], sep = "_")) %>% 
+  ungroup() %>% 
+  dplyr::select(c(id_yr_seas, IRGVals_avg, forbgrass_biomass_avg, yr_seas))
+
+```
+
+##IRG vals overlap
+
+```{r}
+#create list of indiv by id_yr_seas with only id_yr_seas on HR_size_km2
+habitatIRG_week <- habitat_week %>%
+  dplyr::select(c(id_yr_seas, IRGVals_avg, yr_seas))
+
+#use only id_yr_seas with >= 4 weeks data per season
+week_4 <- habitatIRG_week %>% #determine which id_yr_seas have at least 4 weeks
+  group_by(id_yr_seas) %>%
+  summarise(n_week = n()) %>%
+  filter(n_week >= 4)
+
+habitatIRG_week <- habitatIRG_week %>% #filter out id yr seas with less than 4 weeks
+  filter(id_yr_seas %in% week_4$id_yr_seas)
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("habitatIRG_week"))
+
+#create looping variable- id_yr_seas
+ids <- unique(habitatIRG_week$id_yr_seas)
+#create data frame to save overlap values
+ol_df_habitatIRG <- data.frame(id1 = "NA", id2 = "NA", ovl_est = "NA")
+
+for(i in 1:length(ids)){ #first loop by ids
+  
+  d1 <- habitatIRG_week %>% filter(id_yr_seas == ids[i])
+  yr_seas1 <- d1$yr_seas[1]
+  d1 <- d1$IRGVals_avg
+  d1 <- d1[!is.na(d1)]
+  
+  for(j in 1:length(ids)){ #second loop by ids (to do pairwise overlap between each id_yr_seas)
+    print(paste0("i: ", i, " j: ", j))
+    t2 <- habitatIRG_week %>% filter(id_yr_seas == ids[j])
+    t2 <- t2$yr_seas[1]
+    
+    if((ids[i] != ids[j]) & (t2 == yr_seas1)){#only run if ids are not the same and yr_seas is the same
+      d2 <- habitatIRG_week %>% filter(id_yr_seas == ids[j])
+      d2 <- d2$IRGVals_avg
+      d2 <- d2[!is.na(d2)]
+      
+      d_list <- list(d1, d2)
+      
+      ol <- overlapping::overlap(d_list, nbins = 50) #overlapping package estimate density overlap
+      
+      df <- data.frame(id1 = ids[i], id2 = ids[j], ovl_est = ol[["OV"]][["Y1-Y2"]]) #create data frame with ids
+      
+      ol_df_habitatIRG <- rbind(df, ol_df_habitatIRG) #combine data with pre-existing df
+    }
+  }
+}
+
+
+stopCluster(clust)   #stop the parallelization framework
+
+ol_df_habitatIRG <- ol_df_habitatIRG %>% 
+  filter(id1 != "NA")
+
+saveRDS(ol_df_habitatIRG, 
+          file = "./Code output/niche_densities/Oct_2022/id_yr_seas_weekhabitatIRG_ol.rds")
+```
+
+##Forb/grass biomass overlap
+
+```{r}
+#create list of indiv by id_yr_seas with only id_yr_seas on HR_size_km2
+habitat_biomass_week <- habitat_week %>%
+  dplyr::select(c(id_yr_seas, forbgrass_biomass_avg, yr_seas))
+
+#use only id_yr_seas with >= 4 weeks data per season
+week_4 <- habitat_biomass_week %>% #determine which id_yr_seas have at least 4 weeks
+  group_by(id_yr_seas) %>%
+  summarise(n_week = n()) %>%
+  filter(n_week >= 4)
+
+habitat_biomass_week <- habitat_biomass_week %>% #filter out id yr seas with less than 4 weeks
+  filter(id_yr_seas %in% week_4$id_yr_seas)
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("habitat_biomass_week"))
+
+#create looping variable- id_yr_seas
+ids <- unique(habitat_biomass_week$id_yr_seas)
+#create data frame to save overlap values
+ol_df_habitat_biomass <- data.frame(id1 = "NA", id2 = "NA", ovl_est = "NA")
+
+for(i in 1:length(ids)){ #first loop by ids
+  
+  d1 <- habitat_biomass_week %>% filter(id_yr_seas == ids[i])
+  yr_seas1 <- d1$yr_seas[1]
+  d1 <- d1$forbgrass_biomass_avg
+  d1 <- d1[!is.na(d1)]
+  
+  for(j in 1:length(ids)){ #second loop by ids (to do pairwise overlap between each id_yr_seas)
+    print(paste0("i: ", i, " j: ", j))
+    t2 <- habitat_biomass_week %>% filter(id_yr_seas == ids[j])
+    t2 <- t2$yr_seas[1]
+    
+    if((ids[i] != ids[j]) & (t2 == yr_seas1)){#only run if ids are not the same and yr_seas is the same
+      d2 <- habitat_biomass_week %>% filter(id_yr_seas == ids[j])
+      d2 <- d2$forbgrass_biomass_avg
+      d2 <- d2[!is.na(d2)]
+      
+      d_list <- list(d1, d2)
+      
+      ol <- overlapping::overlap(d_list, nbins = 50) #overlapping package estimate density overlap
+      
+      df <- data.frame(id1 = ids[i], id2 = ids[j], ovl_est = as.character(ol[["OV"]][["Y1-Y2"]])) #create data frame with ids
+      
+      ol_df_habitat_biomass <- bind_rows(df, ol_df_habitat_biomass) #combine data with pre-existing df
+    }
+  }
+}
+
+
+stopCluster(clust)   #stop the parallelization framework
+
+ol_df_habitat_biomass <- ol_df_habitat_biomass %>% 
+  filter(id1 != "NA")
+
+saveRDS(ol_df_habitat_biomass, 
+          file = "./Code output/niche_densities/Oct_2022/id_yr_seas_weekhabitat_forbgrassbiomass_ol.rds")
+```
+
+#Overlap weekly network centrality metrics by individual
+
+```{r}
+#load network nodes per week data
+netcent_week <- readRDS("./Code output/individual_network_metrics/individual_node_metrics_week.rds")
+
+#join with data with season
+netcent_week <- left_join(netcent_week, data, by = c("yr_week"))
+
+#create id_yr_seas column and take only distinct id_yr_week
+netcent_week <- netcent_week %>% 
+  mutate(id_yr_seas = paste(id, yr, season, sep = "_")) %>%
+  mutate(id_yr_week = paste(id, yr_week, sep = "_")) %>% 
+  mutate(yr_seas = paste(yr, season, sep = "_")) %>% 
+  distinct(id_yr_week, .keep_all = TRUE)
+
+```
+
+```{r}
+#create list of indiv by id_yr_seas with only id_yr_seas on HR_size_km2
+netcent_week <- netcent_week %>%
+  dplyr::select(c(id_yr_seas, centrality, yr_seas))
+
+#use only id_yr_seas with >= 4 weeks data per season
+week_4 <- netcent_week %>% #determine which id_yr_seas have at least 4 weeks
+  group_by(id_yr_seas) %>%
+  summarise(n_week = n()) %>%
+  filter(n_week >= 4)
+
+netcent_week <- netcent_week %>% #filter out id yr seas with less than 4 weeks
+  filter(id_yr_seas %in% week_4$id_yr_seas)
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("netcent_week"))
+
+#create looping variable- id_yr_seas
+ids <- unique(netcent_week$id_yr_seas)
+#create data frame to save overlap values
+ol_df_netcent <- data.frame(id1 = "NA", id2 = "NA", ovl_est = "NA")
+
+for(i in 11:length(ids)){ #first loop by ids
+  
+  d1 <- netcent_week %>% filter(id_yr_seas == ids[i])
+  yr_seas1 <- d1$yr_seas[1]
+  d1 <- d1$centrality
+  d1 <- d1[!is.na(d1)]
+  
+  for(j in 1111:length(ids)){ #second loop by ids (to do pairwise overlap between each id_yr_seas)
+    print(paste0("i: ", i, " j: ", j))
+    t2 <- netcent_week %>% filter(id_yr_seas == ids[j])
+    t2 <- t2$yr_seas[1]
+    
+    if((ids[i] != ids[j]) & (t2 == yr_seas1)){#only run if ids are not the same and yr_seas is the same
+      d2 <- netcent_week %>% filter(id_yr_seas == ids[j])
+      d2 <- d2$centrality
+      d2 <- d2[!is.na(d2)]
+      
+      d_list <- list(d1, d2)
+      
+      ol <- overlapping::overlap(d_list, nbins = 50) #overlapping package estimate density overlap
+      
+      df <- data.frame(id1 = ids[i], id2 = ids[j], ovl_est = as.character(ol[["OV"]][["Y1-Y2"]])) #create data frame with ids
+      
+      ol_df_netcent <- bind_rows(df, ol_df_netcent) #combine data with pre-existing df
+    }
+  }
+}
+
+
+stopCluster(clust)   #stop the parallelization framework
+
+ol_df_netcent <- ol_df_netcent %>% 
+  filter(id1 != "NA")
+
+saveRDS(ol_df_netcent, file = "./Code output/niche_densities/Oct_2022/id_yr_seas_weeknetcent_ol.rds")
+```
+
+#Individual overlap- daily high activity times
+Overlap by id_yr_seas
+
+```{r}
+#load highly active times per day data
+highact_day <- read.csv("./Code output/indiv_alldata_highact_times.csv")
+```
+
+```{r}
+#create list of indiv by id_yr_seas with only id_yr_seas on HR_size_km2
+highact_day <- highact_day %>%
+  dplyr::select(c(id_yr_seas, time)) %>% 
+  rowwise() %>% 
+  mutate(yr_seas = paste(str_split(id_yr_seas, "_")[[1]][2], 
+         str_split(id_yr_seas, "_")[[1]][3], sep = "_")) %>% 
+  ungroup()
+
+#use only id_yr_seas with >= 4 weeks data per season (28 days)
+week_4 <- highact_day %>% #determine which id_yr_seas have at least 4 weeks
+  group_by(id_yr_seas) %>%
+  summarise(n_day = n()) %>%
+  filter(n_day >= 28)
+
+highact_day <- highact_day %>% #filter out id yr seas with less than 4 weeks
+  filter(id_yr_seas %in% week_4$id_yr_seas)
+
+##setup cluster to run on multiple cores
+  #set number of cores to use (1 less than you have)
+no_cores <- detectCores()-1
+# Setup cluster
+clust <- makeCluster(no_cores) 
+# export the objects you need for your calculations from your environment to each node's environment
+clusterExport(clust, varlist=c("highact_day"))
+
+#create looping variable- id_yr_seas
+ids <- unique(highact_day$id_yr_seas)
+#create data frame to save overlap values
+ol_df_dayact <- data.frame(id1 = "NA", id2 = "NA", ovl_est = "NA")
+  
+for(i in 1:length(ids)){ #first loop by ids
+  
+  d1 <- highact_day %>% filter(id_yr_seas == ids[i])
+  yr_seas1 <- d1$yr_seas[1]
+  d1 <- d1$time
+  d1 <- d1[!is.na(d1)]
+  
+  for(j in 1:length(ids)){ #second loop by ids (to do pairwise overlap between each id_yr_seas)
+    print(paste0("i: ", i, " j: ", j))
+    t2 <- highact_day %>% filter(id_yr_seas == ids[j])
+    t2 <- t2$yr_seas[1]
+    
+    if((ids[i] != ids[j]) & (t2 == yr_seas1)){#only run if ids are not the same and yr_seas is the same
+      d2 <- highact_day %>% filter(id_yr_seas == ids[j])
+      d2 <- d2$time
+      d2 <- d2[!is.na(d2)]
+      
+      d_list <- list(d1, d2)
+      
+      ol <- overlapping::overlap(d_list, nbins = 50) #overlapping package estimate density overlap
+      
+      df <- data.frame(id1 = ids[i], id2 = ids[j], 
+                       ovl_est = as.character(ol[["OV"]][["Y1-Y2"]])) #create data frame with ids
+      
+      ol_df_dayact <- bind_rows(df, ol_df_dayact) #combine data with pre-existing df
+    }
+  }
+}
+  
+stopCluster(clust)   #stop the parallelization framework
+
+ol_df_dayact <- ol_df_dayact %>% 
+  filter(id1 != "NA")
+
+saveRDS(ol_df_dayact, file = "./Code output/niche_densities/Oct_2022/id_yr_seas_day_timehighact_ol.rds")
+```
+
+
+#Extra code
+
+```{r}
+#ridgeline density plots
+ggplot(habitat_week) + 
+  geom_density_ridges(aes(x = HR_size_km2, y = species, group = interaction(species,cid), fill = species), scale = 1.5, alpha = 0.4) +
+  theme(legend.position = "none") +
+  xlim(c(0, 20)) +
+  labs(title = "Individual weekly home range size", y = "Species", 
+       x = "Home range size (km2)")
+```
+
+```{r}
+
+ovl <- ot[["OV"]]
+
+ovl <- as.data.frame(ovl)
+
+#assign ids to separate columns and create species variable
+ovl_day_disp <- rownames_to_column(ovl, "row_names")
+
+ovl_day_disp <- ovl_day_disp %>%
+  separate(row_names, into= c("id1", "id2"), sep= "-") %>%
+  mutate(spp1 = if_else(grepl("BI", id1), "bison",
+                if_else(grepl("BH", id1), "bighorn",
+                if_else(grepl("MD", id1), "deer",
+                if_else(grepl("EL", id1), "elk",
+                if_else(grepl("PR", id1), "pronghorn", "NA")))))) %>%
+  mutate(spp2 = if_else(grepl("BI", id2), "bison",
+                if_else(grepl("BH", id2), "bighorn",
+                if_else(grepl("MD", id2), "deer",
+                if_else(grepl("EL", id2), "elk",
+                if_else(grepl("PR", id2), "pronghorn", "NA")))))) %>%
+  mutate(spp_comb = paste0(spp1, "-", spp2))
+
+
+```
+
+
+```{r}
+#plot overlap values
+ggplot(data = ovl_day_disp, aes(x = spp_comb, y = ovl, fill = spp_comb)) +
+  geom_violin() +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 0.7) +
+    theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Individual overlap: daily displacement", x = "Species",
+       y = "Proportion overlap")
+```

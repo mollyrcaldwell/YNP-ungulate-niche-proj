@@ -1,0 +1,94 @@
+---
+title: "MoveVis Example"
+author: "Molly Caldwell"
+date: "1/27/2023"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/") #set root dir
+```
+
+```{r}
+#load packages
+library(tidyverse)
+library(raster)
+library(sf)
+library(mapview)
+library(moveVis)
+library(lubridate)
+
+#set wd
+setwd("~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+
+```{r}
+#load all gps data
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_3.2022.rds")
+```
+
+#Bison movevis example
+2 individual bison that migrate during spring that exhibit different paths.
+
+```{r}
+#filter data to bison of interest
+bison <- data %>% 
+  filter(id_yr_seas %in% c("BI131_2021_spring", "BI138_2021_spring"))
+
+#filter data to early spring 
+bison_es <- bison %>% 
+  filter(date < as.POSIXct("2021-06-01 00:00:00", format = "%Y-%m-%d %H:%M:%S"))
+
+#project data
+bison_es <- st_transform(bison_es, crs = CRS("+proj=longlat +ellps=WGS84"))
+
+#separate geometry to x y columns
+bison_es <- bison_es %>% 
+   mutate(x = unlist(purrr::map(bison_es$geometry,1)),
+           y = unlist(purrr::map(bison_es$geometry,2)))
+
+bison_es$geometry <- NULL
+
+#order by id and timestamp
+bison_es <- bison_es %>% 
+  group_by(id_yr_seas) %>% 
+  arrange(date, .by_group = T) %>% 
+  dplyr::select(c("id_yr_seas", "x", "y", "date")) %>% 
+  ungroup()
+
+#rename ids
+bison_es <- bison_es %>% 
+  mutate(id_yr_seas = if_else(id_yr_seas == "BI131_2021_spring", "Bison 131",
+                              "Bison 138"))
+
+#transform data to move class object
+bison_m <- df2move(bison_es, proj = CRS("+proj=longlat +ellps=WGS84"), x = "x", y = "y",
+                   time = "date", track_id = "id_yr_seas")
+
+
+
+#align data to a uniform time scale
+u_bison <- align_move(bison_m, res = 2, unit = "hours")
+
+# create spatial frames with a OpenStreetMap watercolour map
+frames <- frames_spatial(u_bison, path_colours = c("goldenrod1", "goldenrod4"),
+                         map_service = "osm", map_type = "topographic", alpha = 0.5, 
+                         tail_colour = c("grey"), tail_size = 0.8,
+                         trace_show = T, trace_colour = c("grey"),
+                         equidistant = F) %>% 
+  add_labels(x = "Longitude", y = "Latitude") %>% 
+  add_northarrow() %>% 
+  add_scalebar() %>% 
+  add_timestamps(type = "label") %>% 
+  add_progress()
+
+
+frames[[5]] # preview one of the frames, e.g. the 100th frame
+
+#export gif as file
+animate_frames(frames, out_file = "bison_example2.gif")
+```

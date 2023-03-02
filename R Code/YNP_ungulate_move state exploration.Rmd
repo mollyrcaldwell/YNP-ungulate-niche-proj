@@ -1,0 +1,50 @@
+---
+title: "YNP Ungulate move state exploration"
+author: "Molly Caldwell"
+date: "2/27/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+knitr::opts_knit$set(root.dir = "~/UWyo/PhD project/YNP-ungulate-niche-proj/")
+```
+
+```{r}
+#load packages
+library(tidyverse)
+```
+
+#Load data
+
+```{r}
+#load data with movement parameters calculated
+data <- readRDS("./Data/GPS data/Cleaned/allspp_cleanedGPSdata_seasonal_moveparams_3.2022.rds")
+
+data$geometry <- NULL
+
+#convert to data frame and drop NAs in step length and turn angle
+data <- as.data.frame(data) %>% 
+  drop_na(dist, rel.angle) %>% 
+```
+
+#Detemine steps with 180 degree turn angles
+
+```{r}
+#summary of number of steps at rest (1) and not at rest (0) at different turn angle bins
+ta_summ <- data %>% 
+  mutate(dist = as.integer(dist)) %>% 
+  mutate(rel.angle = as.integer(rel.angle)) %>% 
+  mutate(rest_SL = if_else(dist < 20, 1, 0)) %>% 
+  mutate(TA_bin = if_else(rel.angle %in% c(160:200), "160-200",
+                            if_else(rel.angle %in% c(50:159), "50-159",
+                            if_else(rel.angle %in% c(0:49), "0-49",
+                            if_else(rel.angle %in% c(201:360), "201-360", as.character(NA)))))) %>% 
+  group_by(species, rest_SL, TA_bin) %>% 
+  summarize(n())
+
+#save table 
+write.table(ta_summ, "./Code output/turnangle_rest_summarytable_spp.txt", sep = ",",
+            row.names = F)
+```
+
