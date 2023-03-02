@@ -19,11 +19,7 @@ library(mapview)
 library(tidyverse)
 library(adehabitatHR)
 library(move)
-<<<<<<< HEAD
-library(BBMM) # fix
-=======
 library(BBMM)
->>>>>>> 5cda1eb6d56219fc13b7bc11cede02ed0a3db28c
 library(lubridate)
 library(parallel)
 library(tidyverse)
